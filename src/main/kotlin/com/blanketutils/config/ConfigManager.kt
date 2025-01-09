@@ -51,11 +51,15 @@ class JsoncParser {
         private val SINGLE_LINE_COMMENT = """//[^\n]*""".toRegex()
         private val MULTI_LINE_COMMENT = """/\*[\s\S]*?\*/""".toRegex()
         private val CONFIG_SECTION = """\/\*\s*CONFIG_SECTION\s*\*\/([\s\S]*?)(?:\/\*\s*END_CONFIG_SECTION\s*\*\/|$)""".toRegex()
+        private val TRAILING_COMMA = """,(\s*[}\]])""".toRegex()
     }
 
     fun parseWithComments(content: String): Pair<String, Map<String, String>> {
         val comments = mutableMapOf<String, String>()
         var processedContent = content
+
+        // Remove trailing commas before JSON parsing
+        processedContent = processedContent.replace(TRAILING_COMMA, "$1")
 
         content.split("\n").forEach { line ->
             SINGLE_LINE_COMMENT.find(line)?.let { match ->
@@ -278,7 +282,7 @@ class ConfigManager<T : ConfigData>(
         val mergedConfig = mergeConfigs(oldConfig, defaultConfig)
         configData.set(mergedConfig)
         saveConfig(mergedConfig)
-        logger.info("Configuration migrated from version ${oldConfig.version} to $currentVersion")
+        //logger.info("Configuration migrated from version ${oldConfig.version} to $currentVersion")
     }
 
     private fun mergeConfigs(oldConfig: T, newConfig: T): T {
