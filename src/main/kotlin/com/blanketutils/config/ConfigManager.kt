@@ -100,7 +100,14 @@ class ConfigManager<T : ConfigData>(
     private val backupDir = configDir.resolve("${defaultConfig.configId}/backups")
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
-    // Optimized Gson instance
+    // Initialize all state-related properties
+    private val configData = AtomicReference(defaultConfig)
+    private val lastValidConfig = AtomicReference(defaultConfig)
+    private val lastSavedHash = AtomicInteger(defaultConfig.hashCode())
+    private val currentComments = ConcurrentHashMap<String, String>()
+    private val lastModifiedTime = AtomicLong(0)
+    private val lastFileSize = AtomicLong(0)
+
     private val gson = GsonBuilder()
         .setPrettyPrinting()
         .disableHtmlEscaping()
@@ -110,15 +117,6 @@ class ConfigManager<T : ConfigData>(
 
     private val parser = JsoncParser()
     private val dateFormatter = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")
-
-    // Thread-safe state management
-    private val configData = AtomicReference(defaultConfig)
-    private val lastSavedHash = AtomicInteger(defaultConfig.hashCode())
-    private val currentComments = ConcurrentHashMap<String, String>()
-
-    // File change detection optimization
-    private var lastModifiedTime = AtomicLong(0)
-    private var lastFileSize = AtomicLong(0)
 
     private var watcherJob: Job? = null
     private var autoSaveJob: Job? = null
@@ -236,7 +234,7 @@ class ConfigManager<T : ConfigData>(
         try {
             val content = readConfigFile()
             if (content.isBlank()) {
-                saveConfig(defaultConfig)
+                handleConfigError("empty_file")
                 return@withContext
             }
 
@@ -255,6 +253,7 @@ class ConfigManager<T : ConfigData>(
                     handleVersionMismatch(parsedConfig)
                 } else {
                     configData.set(parsedConfig)
+                    lastValidConfig.set(parsedConfig)
                     lastSavedHash.set(parsedConfig.hashCode())
                 }
             } catch (e: JsonSyntaxException) {
@@ -269,20 +268,43 @@ class ConfigManager<T : ConfigData>(
 
     private suspend fun handleConfigError(reason: String) {
         createBackup(reason)
+
+        // First try to restore from backup
         restoreFromBackup()?.let { restoredConfig ->
             configData.set(restoredConfig)
+            lastValidConfig.set(restoredConfig)
             saveConfig(restoredConfig)
-        } ?: run {
+            logger.debug("Restored configuration from backup after $reason")
+            return
+        }
+
+        // If no backup, use last valid config instead of default
+        val lastKnownGood = lastValidConfig.get()
+        if (lastKnownGood != defaultConfig) {
+            configData.set(lastKnownGood)
+            saveConfig(lastKnownGood)
+            logger.debug("Restored last valid configuration after $reason")
+        } else {
+            // Only use default config if we have no other option
+            configData.set(defaultConfig)
             saveConfig(defaultConfig)
+            logger.debug("Reset to default configuration after $reason")
         }
     }
 
     private suspend fun handleVersionMismatch(oldConfig: T) {
         createBackup("pre_migration")
-        val mergedConfig = mergeConfigs(oldConfig, defaultConfig)
+        val currentConfig = configData.get()
+
+        // Merge in this order: oldConfig -> currentConfig -> defaultConfig
+        val mergedConfig = mergeConfigs(
+            mergeConfigs(oldConfig, currentConfig),
+            defaultConfig
+        )
+
         configData.set(mergedConfig)
+        lastValidConfig.set(mergedConfig)
         saveConfig(mergedConfig)
-        //logger.info("Configuration migrated from version ${oldConfig.version} to $currentVersion")
     }
 
     private fun mergeConfigs(oldConfig: T, newConfig: T): T {
@@ -290,7 +312,7 @@ class ConfigManager<T : ConfigData>(
         val newConfigJson = gson.toJsonTree(newConfig).asJsonObject
 
         oldConfigJson.entrySet().forEach { (key, oldValue) ->
-            if (newConfigJson.has(key) && key != "version") {
+            if (key != "version" && newConfigJson.has(key)) {
                 newConfigJson.add(key, oldValue)
             }
         }
@@ -305,7 +327,6 @@ class ConfigManager<T : ConfigData>(
             val backupFile = backupDir.resolve("${defaultConfig.configId}_${reason}_$timestamp.jsonc")
             Files.copy(configFile, backupFile, StandardCopyOption.REPLACE_EXISTING)
 
-            // Cleanup old backups
             Files.list(backupDir).use { stream ->
                 stream.filter { it.toString().endsWith(".jsonc") }
                     .sorted(Comparator.reverseOrder())

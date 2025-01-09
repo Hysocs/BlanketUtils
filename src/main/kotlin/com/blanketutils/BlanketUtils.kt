@@ -16,55 +16,52 @@ object BlanketUtils : ModInitializer {
     const val VERSION = "1.0.0"
 
     // ANSI color and format codes
-    private object Colors {
-        const val RESET = "\u001B[0m"
-        const val BOLD = "\u001B[1m"
+    object Colors {
+        private const val ESC = "\u001B"
+        private const val BOLD = "${ESC}[1m"
 
-        // Regular colors
-        const val YELLOW = "\u001B[33m"
-        const val GREEN = "\u001B[32m"
-        const val RED = "\u001B[31m"
-        const val PURPLE = "\u001B[35m"
+        // Helper function to scope color to specific text
+        private fun color(text: String, colorCode: String): String {
+            return "$colorCode$text${ESC}[39m${if (colorCode.contains(BOLD)) "${ESC}[22m" else ""}"
+        }
 
-        // Bright colors
-        const val BRIGHT_BLACK = "\u001B[90m"
-        const val BRIGHT_YELLOW = "\u001B[93m"
-        const val BRIGHT_GREEN = "\u001B[92m"
-        const val BRIGHT_PURPLE = "\u001B[95m"
-
-        // Compound styles
-        const val BOLD_YELLOW = "\u001B[1;33m"
-        const val BOLD_GREEN = "\u001B[1;32m"
-        const val BOLD_RED = "\u001B[1;31m"
-        const val BOLD_PURPLE = "\u001B[1;35m"
-        const val BOLD_BRIGHT_PINK = "\u001B[1;95m"   // Bright bold pink
+        // Color wrapper functions
+        fun boldPurple(text: String) = color(text, "${ESC}[1;35m")
+        fun boldBrightPink(text: String) = color(text, "${ESC}[1;95m")
+        fun brightBlack(text: String) = color(text, "${ESC}[90m")
+        fun boldYellow(text: String) = color(text, "${ESC}[1;33m")
+        fun boldGreen(text: String) = color(text, "${ESC}[1;32m")
+        fun boldRed(text: String) = color(text, "${ESC}[1;31m")
+        fun brightPurple(text: String) = color(text, "${ESC}[95m")
     }
 
     private fun getModName(): String {
-        return "${Colors.BOLD_BRIGHT_PINK}blanket${Colors.BOLD_PURPLE}utils"
+        return Colors.boldBrightPink("blanket") + Colors.boldPurple("utils")
     }
 
     override fun onInitialize() {
         val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-        val prefix = "${Colors.BOLD_PURPLE}[${getModName()}${Colors.BOLD_PURPLE}]${Colors.RESET}"
+        val prefix = Colors.boldPurple("[") + getModName() + Colors.boldPurple("]")
 
         logger.info("")
-        logger.info("$prefix ${Colors.BOLD_PURPLE}============================")
-        logger.info("$prefix ${Colors.BOLD}${Colors.BRIGHT_PURPLE}${getModName()} v$VERSION${Colors.RESET}")
-        logger.info("$prefix ${Colors.BRIGHT_BLACK}Loading at: $timestamp")
+        logger.info("$prefix ${Colors.boldPurple("============================")}")
+        logger.info("$prefix ${Colors.brightPurple(getModName() + " v$VERSION")}")
+        logger.info("$prefix ${Colors.brightBlack("Loading at: $timestamp")}")
 
         // Run config tests
         val results = ConfigTester.runAllTests()
-        logger.info("$prefix ${Colors.BOLD_YELLOW}Running Configuration Tests:")
+        logger.info("$prefix ${Colors.boldYellow("Running Configuration Tests:")}")
         results.forEach { (testName, passed) ->
-            val status = if (passed) "${Colors.BOLD_GREEN}✓" else "${Colors.BOLD_RED}✗"
-            logger.info("$prefix ${Colors.BRIGHT_BLACK}- Test ${testName.capitalize()}: $status${Colors.RESET}")
+            val status = if (passed) Colors.boldGreen("GOOD") else Colors.boldRed("BAD")
+            logger.info("$prefix ${Colors.brightBlack("- Test ${testName.capitalize()}: ")}$status")
         }
 
-        logger.info("$prefix ${Colors.BOLD_GREEN}Successfully initialized!${Colors.RESET}")
-        logger.info("$prefix ${Colors.BRIGHT_BLACK}Runtime: ${System.getProperty("java.version")}")
-        logger.info("$prefix ${Colors.BRIGHT_BLACK}OS: ${System.getProperty("os.name")}")
-        logger.info("$prefix ${Colors.BOLD_PURPLE}============================")
+        logger.info("$prefix ${Colors.boldGreen("Successfully initialized!")}")
+        logger.info("$prefix ${Colors.brightBlack("Runtime: ${System.getProperty("java.version")}")}")
+        logger.info("$prefix ${Colors.brightBlack("OS: ${System.getProperty("os.name")}")}")
+        logger.info("$prefix ${Colors.boldPurple("============================")}")
+
+
         logger.info("")
     }
 }
