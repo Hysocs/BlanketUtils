@@ -1,5 +1,6 @@
 package com.blanketutils
 
+import com.blanketutils.command.CommandTester
 import net.fabricmc.api.ModInitializer
 import org.slf4j.LoggerFactory
 import java.time.LocalDateTime
@@ -8,7 +9,9 @@ import kotlinx.coroutines.runBlocking
 import com.blanketutils.config.ConfigData
 import com.blanketutils.config.ConfigManager
 import com.blanketutils.config.ConfigTester
+import com.blanketutils.gui.GuiTester
 import java.nio.file.Paths
+import java.util.*
 
 object BlanketUtils : ModInitializer {
     private val logger = LoggerFactory.getLogger("blanketutils")
@@ -53,9 +56,30 @@ object BlanketUtils : ModInitializer {
         logger.info("$prefix ${Colors.boldYellow("Running Configuration Tests:")}")
         results.forEach { (testName, passed) ->
             val status = if (passed) Colors.boldGreen("GOOD") else Colors.boldRed("BAD")
-            logger.info("$prefix ${Colors.brightBlack("- Test ${testName.capitalize()}: ")}$status")
+            logger.info("$prefix ${Colors.brightBlack("- Test ${testName.replaceFirstChar {
+                if (it.isLowerCase()) it.titlecase(
+                    Locale.getDefault()
+                ) else it.toString()
+            }}: ")}$status")
         }
-
+        logger.info("$prefix ${Colors.boldYellow("Running Command System Tests:")}")
+        CommandTester.runAllTests().forEach { (testName, passed) ->
+            val status = if (passed) Colors.boldGreen("GOOD") else Colors.boldRed("BAD")
+            logger.info("$prefix ${Colors.brightBlack("- Test ${testName.replaceFirstChar {
+                if (it.isLowerCase()) it.titlecase(
+                    Locale.getDefault()
+                ) else it.toString()
+            }}: ")}$status")
+        }
+        logger.info("$prefix ${Colors.boldYellow("Running GUI System Tests:")}")
+        GuiTester.runAllTests().forEach { (testName, passed) ->
+            val status = if (passed) Colors.boldGreen("GOOD") else Colors.boldRed("BAD")
+            logger.info("$prefix ${Colors.brightBlack("- Test ${testName.replaceFirstChar {
+                if (it.isLowerCase()) it.titlecase(
+                    Locale.getDefault()
+                ) else it.toString()
+            }}: ")}$status")
+        }
         logger.info("$prefix ${Colors.boldGreen("Successfully initialized!")}")
         logger.info("$prefix ${Colors.brightBlack("Runtime: ${System.getProperty("java.version")}")}")
         logger.info("$prefix ${Colors.brightBlack("OS: ${System.getProperty("os.name")}")}")
