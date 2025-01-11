@@ -1,6 +1,6 @@
 package com.blanketutils
 
-import com.blanketutils.command.CommandTester
+
 import net.fabricmc.api.ModInitializer
 import org.slf4j.LoggerFactory
 import java.time.LocalDateTime
@@ -62,15 +62,7 @@ object BlanketUtils : ModInitializer {
                 ) else it.toString()
             }}: ")}$status")
         }
-        logger.info("$prefix ${Colors.boldYellow("Running Command System Tests:")}")
-        CommandTester.runAllTests().forEach { (testName, passed) ->
-            val status = if (passed) Colors.boldGreen("GOOD") else Colors.boldRed("BAD")
-            logger.info("$prefix ${Colors.brightBlack("- Test ${testName.replaceFirstChar {
-                if (it.isLowerCase()) it.titlecase(
-                    Locale.getDefault()
-                ) else it.toString()
-            }}: ")}$status")
-        }
+
         logger.info("$prefix ${Colors.boldYellow("Running GUI System Tests:")}")
         GuiTester.runAllTests().forEach { (testName, passed) ->
             val status = if (passed) Colors.boldGreen("GOOD") else Colors.boldRed("BAD")

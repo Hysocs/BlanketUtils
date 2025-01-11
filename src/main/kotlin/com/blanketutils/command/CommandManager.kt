@@ -1,173 +1,317 @@
 package com.blanketutils.command
 
 import com.mojang.brigadier.CommandDispatcher
+import com.mojang.brigadier.builder.LiteralArgumentBuilder
 import com.mojang.brigadier.context.CommandContext
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
+import net.minecraft.server.command.CommandManager.literal
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.text.Text
+import me.lucko.fabric.api.permissions.v0.Permissions
+import net.minecraft.server.MinecraftServer
 import net.minecraft.server.network.ServerPlayerEntity
 import org.slf4j.LoggerFactory
 import java.util.function.Supplier
 
 /**
- * Utility class for handling command registration and permissions in BlanketUtils
- * with adaptive permission system support
+ * Utility class for simplified command registration in Fabric mods
  */
 class CommandManager(
     private val modId: String,
-    private val logger: org.slf4j.Logger = LoggerFactory.getLogger("BlanketUtils-CommandManager")
+    private val defaultPermissionLevel: Int = 2,
+    private val defaultOpLevel: Int = 2
 ) {
-    private var serverInstance: net.minecraft.server.MinecraftServer? = null
+    private val logger = LoggerFactory.getLogger("$modId-Commands")
+    private val commands = mutableListOf<CommandData>()
+    private val allPermissions = mutableSetOf<String>()
 
-    // Cached reflection results for performance
-    val fabricPermissionsAvailable = checkClassAvailable("me.lucko.fabric.api.permissions.v0.Permissions")
-    val luckPermsAvailable = checkClassAvailable("net.luckperms.api.LuckPerms")
-    val cyberPermissionsAvailable = checkClassAvailable("com.github.zly2006.cyberpermission.api.PermissionApi")
+    // Keep track of all permissions for a command and its subcommands
+    private fun collectPermissions(command: CommandData) {
+        allPermissions.add(command.permission)
+        command.subcommands.forEach { subcommand ->
+            collectSubcommandPermissions(subcommand, command.permission)
+        }
+    }
 
-    /**
-     * Checks if a class is available without throwing exceptions
-     */
-    fun checkClassAvailable(className: String): Boolean {
-        return try {
-            Class.forName(className)
-            true
-        } catch (e: Exception) {
-            false
+    private fun collectSubcommandPermissions(subcommand: SubcommandData, parentPermission: String) {
+        subcommand.permission?.let { permission ->
+            allPermissions.add(permission)
+        } ?: allPermissions.add(parentPermission)
+
+        subcommand.subcommands.forEach { nestedCommand ->
+            collectSubcommandPermissions(nestedCommand, subcommand.permission ?: parentPermission)
         }
     }
 
     /**
-     * Registers a command using the provided builder function
+     * Simulates permission checks for all registered commands
+     * This helps initialize permission systems and verify permissions are registered
      */
-    fun registerCommand(buildCommand: (CommandDispatcher<ServerCommandSource>) -> Unit) {
+    fun simulatePermissionChecks(server: MinecraftServer) {
+        logger.info("Simulating permission checks for $modId commands...")
+
+        val players = server.playerManager.playerList
+        if (players.isEmpty()) {
+            logger.info("No players online. Permission simulation will only check console permissions.")
+        }
+
+        // Simulate for all registered permissions
+        allPermissions.forEach { permission ->
+            logger.debug("Simulating checks for permission: $permission")
+
+            // Check for console
+            try {
+                server.commandSource.hasPermissionLevel(defaultOpLevel)
+                logger.debug("Console permission check successful for: $permission")
+            } catch (e: Exception) {
+                logger.warn("Failed to check console permission for: $permission", e)
+            }
+
+            // Check for each player
+            players.forEach { player ->
+                simulatePlayerPermissionCheck(player, permission)
+            }
+        }
+
+        logger.info("Permission simulation completed for ${allPermissions.size} permissions.")
+    }
+
+    private fun simulatePlayerPermissionCheck(player: ServerPlayerEntity, permission: String) {
+        try {
+            // Try LuckPerms/Permissions API
+            try {
+                Permissions.check(player, permission, defaultPermissionLevel)
+                logger.debug("Permission API check successful for player ${player.name.string}: $permission")
+            } catch (e: NoClassDefFoundError) {
+                // Fallback to vanilla op
+                player.hasPermissionLevel(defaultOpLevel)
+                logger.debug("Vanilla permission check successful for player ${player.name.string}: $permission")
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to check permission for player ${player.name.string}: $permission", e)
+        }
+    }
+
+    data class CommandData(
+        val name: String,
+        val permission: String,
+        val permissionLevel: Int,
+        val opLevel: Int,
+        val aliases: List<String>,
+        val executor: ((CommandContext<ServerCommandSource>) -> Int)?,
+        val subcommands: List<SubcommandData>
+    )
+
+    data class SubcommandData(
+        val name: String,
+        val permission: String?,
+        val permissionLevel: Int?,
+        val opLevel: Int?,
+        val executor: ((CommandContext<ServerCommandSource>) -> Int)?,
+        val subcommands: List<SubcommandData>
+    )
+
+    inner class CommandConfig {
+        internal var executor: ((CommandContext<ServerCommandSource>) -> Int)? = null
+        internal val subcommands = mutableListOf<SubcommandData>()
+
+        fun executes(executor: (CommandContext<ServerCommandSource>) -> Int) {
+            this.executor = executor
+        }
+
+        fun subcommand(
+            name: String,
+            permission: String? = null,
+            permissionLevel: Int? = null,
+            opLevel: Int? = null,
+            builder: (SubcommandConfig.() -> Unit)? = null
+        ) {
+            val config = SubcommandConfig().apply { builder?.invoke(this) }
+            subcommands.add(
+                SubcommandData(
+                    name = name,
+                    permission = permission,
+                    permissionLevel = permissionLevel,
+                    opLevel = opLevel,
+                    executor = config.executor,
+                    subcommands = config.subcommands
+                )
+            )
+        }
+    }
+
+    inner class SubcommandConfig {
+        internal var executor: ((CommandContext<ServerCommandSource>) -> Int)? = null
+        internal val subcommands = mutableListOf<SubcommandData>()
+
+        fun executes(executor: (CommandContext<ServerCommandSource>) -> Int) {
+            this.executor = executor
+        }
+
+        fun subcommand(
+            name: String,
+            permission: String? = null,
+            permissionLevel: Int? = null,
+            opLevel: Int? = null,
+            builder: (SubcommandConfig.() -> Unit)? = null
+        ) {
+            val config = SubcommandConfig().apply { builder?.invoke(this) }
+            subcommands.add(
+                SubcommandData(
+                    name = name,
+                    permission = permission,
+                    permissionLevel = permissionLevel,
+                    opLevel = opLevel,
+                    executor = config.executor,
+                    subcommands = config.subcommands
+                )
+            )
+        }
+    }
+
+    fun command(
+        name: String,
+        permission: String = "$modId.command.$name",
+        permissionLevel: Int = defaultPermissionLevel,
+        opLevel: Int = defaultOpLevel,
+        aliases: List<String> = listOf(),
+        builder: CommandConfig.() -> Unit
+    ) {
+        val config = CommandConfig().apply(builder)
+        commands.add(
+            CommandData(
+                name = name,
+                permission = permission,
+                permissionLevel = permissionLevel,
+                opLevel = opLevel,
+                aliases = aliases,
+                executor = config.executor,
+                subcommands = config.subcommands
+            )
+        )
+    }
+
+    fun register() {
         CommandRegistrationCallback.EVENT.register { dispatcher, _, _ ->
             logger.info("Registering commands for $modId")
-            buildCommand(dispatcher)
-        }
-    }
-
-    /**
-     * Checks if a source has the required permission
-     */
-    fun hasPermission(source: ServerCommandSource, permission: String, level: Int): Boolean {
-        val player = source.player
-        return if (player != null) {
-            hasPlayerPermission(player, permission, level)
-        } else {
-            source.hasPermissionLevel(level)
-        }
-    }
-
-    /**
-     * Checks player permissions across different permission systems
-     */
-    fun hasPlayerPermission(player: ServerPlayerEntity, permission: String, level: Int): Boolean {
-        return when {
-            luckPermsAvailable && hasLuckPermsPermission(player, permission, level) -> true
-            cyberPermissionsAvailable && hasCyberPermission(player, permission) -> true
-            fabricPermissionsAvailable && hasFabricPermission(player, permission, level) -> true
-            else -> player.hasPermissionLevel(level)
-        }
-    }
-
-    /**
-     * Checks LuckPerms permission using reflection
-     */
-    private fun hasLuckPermsPermission(player: ServerPlayerEntity, permission: String, level: Int): Boolean {
-        if (!luckPermsAvailable) return false
-
-        return try {
-            val luckPermsProvider = Class.forName("net.luckperms.api.LuckPermsProvider")
-            val api = luckPermsProvider.getMethod("get").invoke(null)
-            val user = api.javaClass.getMethod("getPlayerAdapter", Class::class.java)
-                .invoke(api, ServerPlayerEntity::class.java)
-                .javaClass.getMethod("getUser", ServerPlayerEntity::class.java)
-                .invoke(api, player)
-
-            user.javaClass.getMethod("getCachedData").invoke(user)
-                .javaClass.getMethod("getPermissionData").invoke(user)
-                .javaClass.getMethod("checkPermission", String::class.java)
-                .invoke(user, permission)
-                .toString().toBoolean()
-        } catch (e: Exception) {
-            logger.debug("LuckPerms permission check failed: ${e.message}")
-            false
-        }
-    }
-
-    /**
-     * Checks CyberPermissions using reflection
-     */
-    private fun hasCyberPermission(player: ServerPlayerEntity, permission: String): Boolean {
-        if (!cyberPermissionsAvailable) return false
-
-        return try {
-            val cyberPermClass = Class.forName("com.github.zly2006.cyberpermission.api.PermissionApi")
-            val checkMethod = cyberPermClass.getMethod("check", ServerPlayerEntity::class.java, String::class.java)
-            checkMethod.invoke(null, player, permission) as Boolean
-        } catch (e: Exception) {
-            logger.debug("CyberPermissions check failed: ${e.message}")
-            false
-        }
-    }
-
-    /**
-     * Checks Fabric Permissions API using reflection
-     */
-    private fun hasFabricPermission(player: ServerPlayerEntity, permission: String, level: Int): Boolean {
-        if (!fabricPermissionsAvailable) return false
-
-        return try {
-            val permissionsClass = Class.forName("me.lucko.fabric.api.permissions.v0.Permissions")
-            val checkMethod = permissionsClass.getMethod("check", ServerPlayerEntity::class.java, String::class.java, Int::class.java)
-            checkMethod.invoke(null, player, permission, level) as Boolean
-        } catch (e: Exception) {
-            logger.debug("Fabric Permissions check failed: ${e.message}")
-            false
-        }
-    }
-
-    /**
-     * Simulates permission checks for all online players
-     */
-    fun simulatePermissionChecks(permissions: List<String>, level: Int = 2) {
-        serverInstance?.playerManager?.playerList?.forEach { player ->
-            permissions.forEach { permission ->
-                if (luckPermsAvailable) hasLuckPermsPermission(player, permission, level)
-                if (cyberPermissionsAvailable) hasCyberPermission(player, permission)
-                if (fabricPermissionsAvailable) hasFabricPermission(player, permission, level)
+            commands.forEach { command ->
+                registerCommand(dispatcher, command)
             }
-        } ?: logger.warn("Server instance is null. Permission simulation skipped.")
+        }
     }
 
-    /**
-     * Logs available permission systems on startup
-     */
-    fun logAvailablePermissionSystems() {
-        logger.info("Available permission systems:")
-        logger.info("- LuckPerms: $luckPermsAvailable")
-        logger.info("- CyberPermissions: $cyberPermissionsAvailable")
-        logger.info("- Fabric Permissions API: $fabricPermissionsAvailable")
+    private fun registerCommand(
+        dispatcher: CommandDispatcher<ServerCommandSource>,
+        commandData: CommandData
+    ) {
+        val mainCommand = literal(commandData.name)
+            .requires { source ->
+                hasPermissionOrOp(
+                    source,
+                    commandData.permission,
+                    commandData.permissionLevel,
+                    commandData.opLevel
+                )
+            }
+
+        commandData.executor?.let { executor ->
+            mainCommand.executes(executor)
+        }
+
+        addSubcommands(
+            mainCommand,
+            commandData.subcommands,
+            commandData.permission,
+            commandData.permissionLevel,
+            commandData.opLevel
+        )
+
+        dispatcher.register(mainCommand)
+
+        commandData.aliases.forEach { alias ->
+            dispatcher.register(
+                literal(alias)
+                    .requires { source ->
+                        hasPermissionOrOp(
+                            source,
+                            commandData.permission,
+                            commandData.permissionLevel,
+                            commandData.opLevel
+                        )
+                    }
+                    .redirect(dispatcher.root.getChild(commandData.name))
+            )
+        }
     }
 
-    /**
-     * Sends feedback to command source with color support
-     */
-    fun sendFeedback(source: ServerCommandSource, message: String, color: Int = 0x55FF55, broadcast: Boolean = false) {
-        val coloredMessage = Text.literal(message).styled { it.withColor(color) }
-        source.sendFeedback(Supplier { coloredMessage }, broadcast)
-    }
+    private fun addSubcommands(
+        node: LiteralArgumentBuilder<ServerCommandSource>,
+        subcommands: List<SubcommandData>,
+        parentPermission: String,
+        parentPermissionLevel: Int,
+        parentOpLevel: Int
+    ) {
+        subcommands.forEach { subcommand ->
+            val subNode = literal(subcommand.name)
+                .requires { source ->
+                    hasPermissionOrOp(
+                        source,
+                        subcommand.permission ?: parentPermission,
+                        subcommand.permissionLevel ?: parentPermissionLevel,
+                        subcommand.opLevel ?: parentOpLevel
+                    )
+                }
 
-    /**
-     * Sends error message to command source
-     */
-    fun sendError(source: ServerCommandSource, message: String) {
-        source.sendError(Text.literal("§c$message"))
+            subcommand.executor?.let { executor ->
+                subNode.executes(executor)
+            }
+
+            addSubcommands(
+                subNode,
+                subcommand.subcommands,
+                subcommand.permission ?: parentPermission,
+                subcommand.permissionLevel ?: parentPermissionLevel,
+                subcommand.opLevel ?: parentOpLevel
+            )
+
+            node.then(subNode)
+        }
     }
 
     companion object {
-        fun createLogger(name: String): org.slf4j.Logger {
-            return LoggerFactory.getLogger(name)
+        fun sendSuccess(source: ServerCommandSource, message: String, broadcastToOps: Boolean = false) {
+            source.sendFeedback({ Text.literal(message) }, broadcastToOps)
+        }
+
+        fun sendError(source: ServerCommandSource, message: String) {
+            source.sendError(Text.literal(message))
+        }
+
+        fun formatColoredMessage(message: String, color: Int): Text {
+            return Text.literal(message).styled { it.withColor(color) }
+        }
+
+        private fun hasPermissionOrOp(
+            source: ServerCommandSource,
+            permission: String,
+            permissionLevel: Int,
+            opLevel: Int
+        ): Boolean {
+            val player = source.player
+
+            // If it's a player, check both permission and op level
+            return if (player != null) {
+                try {
+                    // Check if player has permission from permission mod
+                    Permissions.check(player, permission, permissionLevel)
+                } catch (e: NoClassDefFoundError) {
+                    // Fallback to op level if no permission mod
+                    player.hasPermissionLevel(opLevel)
+                }
+            } else {
+                // For non-players (like console), use op level
+                source.hasPermissionLevel(opLevel)
+            }
         }
     }
 }
