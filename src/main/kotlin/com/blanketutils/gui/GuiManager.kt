@@ -8,6 +8,7 @@ import net.minecraft.component.type.ProfileComponent
 import net.minecraft.entity.player.PlayerEntity
 import net.minecraft.entity.player.PlayerInventory
 import net.minecraft.inventory.Inventory
+import net.minecraft.inventory.SimpleInventory
 import net.minecraft.item.ItemStack
 import net.minecraft.item.Items
 import net.minecraft.screen.ScreenHandler
@@ -20,138 +21,119 @@ import net.minecraft.text.Text
 import net.minecraft.util.ClickType
 import org.slf4j.LoggerFactory
 import java.util.UUID
-import kotlinx.coroutines.*
-import java.util.concurrent.ConcurrentHashMap
-
-// Core data interfaces
-interface GuiData {
-    val guiId: String
-    val modId: String
-    val title: String
-    val rows: Int
-    val allowPlayerInventory: Boolean
-}
 
 data class InteractionContext(
     val slotIndex: Int,
     val clickType: ClickType,
     val button: Int,
     val clickedStack: ItemStack,
-    val player: ServerPlayerEntity,
-    val guiId: String,
-    val modId: String
+    val player: ServerPlayerEntity
 )
 
-// Central GUI Registry and Manager
-object GuiRegistry {
-    private val logger = LoggerFactory.getLogger(GuiRegistry::class.java)
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+object CustomGui {
+    private val logger = LoggerFactory.getLogger(CustomGui::class.java)
 
-    // Thread-safe collections for managing active GUIs and their states
-    private val activeGuis = ConcurrentHashMap<String, GuiInstance>()
-    private val playerGuis = ConcurrentHashMap<UUID, String>()
-    private val guiHandlers = ConcurrentHashMap<String, GuiHandler>()
-
-    fun registerGui(handler: GuiHandler) {
-        guiHandlers[handler.guiData.guiId] = handler
-        logger.debug("Registered GUI: ${handler.guiData.guiId} for mod: ${handler.guiData.modId}")
-    }
-
-    fun unregisterGui(guiId: String) {
-        guiHandlers.remove(guiId)
-        // Cleanup any active instances
-        activeGuis.entries.removeIf { it.value.guiData.guiId == guiId }
-    }
-
-    fun openGui(player: ServerPlayerEntity, guiId: String, customData: Map<String, Any> = emptyMap()) {
-        val handler = guiHandlers[guiId] ?: run {
-            logger.error("Attempted to open unregistered GUI: $guiId")
-            return
-        }
-
-        val instance = GuiInstance(
-            guiData = handler.guiData,
-            layout = handler.createLayout(player, customData),
-            onInteract = { context -> handler.handleInteraction(context) },
-            onClose = { inventory -> handler.handleClose(player, inventory) }
-        )
-
-        activeGuis[player.uuid.toString() + guiId] = instance
-        playerGuis[player.uuid] = guiId
-
+    fun openGui(
+        player: ServerPlayerEntity,
+        title: String,
+        layout: List<ItemStack>,
+        onInteract: (InteractionContext) -> Unit,
+        onClose: (Inventory) -> Unit
+    ) {
         val factory = SimpleNamedScreenHandlerFactory(
             { syncId, inv, _ ->
-                CustomScreenHandler(
-                    syncId = syncId,
-                    playerInventory = inv,
-                    guiInstance = instance,
-                    allowPlayerInventory = handler.guiData.allowPlayerInventory
-                )
+                CustomScreenHandler(syncId, inv, layout, onInteract, onClose)
             },
-            Text.literal(handler.guiData.title)
+            Text.literal(title)
         )
-
         player.openHandledScreen(factory)
     }
 
-    fun updateGui(player: ServerPlayerEntity, newLayout: List<ItemStack>) {
-        val guiId = playerGuis[player.uuid] ?: return
-        val instanceKey = player.uuid.toString() + guiId
-        val instance = activeGuis[instanceKey] ?: return
+    fun createPlayerHeadButton(
+        textureName: String,
+        title: Text,
+        lore: List<Text>,
+        textureValue: String
+    ): ItemStack {
+        val itemStack = ItemStack(Items.PLAYER_HEAD)
+        itemStack.set(DataComponentTypes.ITEM_NAME, title)
+        itemStack.set(DataComponentTypes.LORE, LoreComponent(lore))
 
-        val screenHandler = player.currentScreenHandler as? CustomScreenHandler ?: return
-        screenHandler.updateInventory(newLayout)
+        // Ensure the name is no longer than 16 characters to comply with Minecraft's limit
+        val safeName = textureName.take(16)
+        val profile = GameProfile(UUID.randomUUID(), safeName)
+        profile.properties.put("textures", Property("textures", textureValue))
+        itemStack.set(DataComponentTypes.PROFILE, ProfileComponent(profile))
+
+        return itemStack
     }
 
-    fun cleanup() {
-        scope.cancel()
-        activeGuis.clear()
-        playerGuis.clear()
-        guiHandlers.clear()
+    fun createNormalButton(
+        item: ItemStack,
+        displayName: String,
+        lore: List<String>
+    ): ItemStack {
+        val newStack = item.copy()
+        newStack.set(DataComponentTypes.ITEM_NAME, Text.literal(displayName))
+        val loreText = lore.map { Text.literal(it) }
+        newStack.set(DataComponentTypes.LORE, LoreComponent(loreText))
+        return newStack
     }
-}
 
-// GUI Handler interface for mods to implement
-interface GuiHandler {
-    val guiData: GuiData
+    fun setItemLore(itemStack: ItemStack, loreLines: List<Any?>) {
+        val textLines = loreLines.mapNotNull { line ->
+            when (line) {
+                is Text -> line
+                is String -> Text.literal(line)
+                null -> null
+                else -> Text.literal(line.toString())
+            }
+        }
 
-    fun createLayout(player: ServerPlayerEntity, customData: Map<String, Any>): List<ItemStack>
-    fun handleInteraction(context: InteractionContext)
-    fun handleClose(player: ServerPlayerEntity, inventory: Inventory)
-}
+        if (textLines.size != loreLines.size) {
+            itemStack.set(
+                DataComponentTypes.LORE,
+                LoreComponent(listOf(Text.literal("§cError setting lore"), Text.literal("§7One of the lines was null")))
+            )
+            return
+        }
 
-// Internal GUI instance data
-data class GuiInstance(
-    val guiData: GuiData,
-    var layout: List<ItemStack>,
-    val onInteract: (InteractionContext) -> Unit,
-    val onClose: (Inventory) -> Unit
-)
+        itemStack.set(DataComponentTypes.LORE, LoreComponent(textLines))
+    }
 
-// Screen Handler implementation
-// Custom slot implementation for GUI
-class InteractiveSlot(inventory: Inventory, index: Int, private val isInteractive: Boolean) : Slot(
-    inventory,
-    index,
-    8 + (index % 9) * 18,  // x coordinate
-    18 + (index / 9) * 18  // y coordinate
-) {
-    override fun canInsert(stack: ItemStack) = isInteractive
-    override fun canTakeItems(player: PlayerEntity) = isInteractive
+    fun stripFormatting(text: String): String {
+        return text.replace(Regex("§[0-9a-fk-or]"), "")
+    }
+
+    fun addEnchantmentGlint(itemStack: ItemStack) {
+        itemStack.set(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, true)
+    }
+
+    fun refreshGui(player: ServerPlayerEntity, newLayout: List<ItemStack>) {
+        val screenHandler = player.currentScreenHandler as? CustomScreenHandler
+        screenHandler?.updateInventory(newLayout) ?: run {
+            logger.warn("Player ${player.name.string} does not have the expected screen handler open.")
+        }
+    }
+
+    fun closeGui(player: ServerPlayerEntity) {
+        player.closeHandledScreen()
+    }
 }
 
 class CustomScreenHandler(
     syncId: Int,
     playerInventory: PlayerInventory,
-    private val guiInstance: GuiInstance,
-    private val allowPlayerInventory: Boolean
+    layout: List<ItemStack>,
+    private var onInteract: ((InteractionContext) -> Unit)?,
+    private var onClose: ((Inventory) -> Unit)?
 ) : ScreenHandler(ScreenHandlerType.GENERIC_9X6, syncId) {
 
     private val guiInventory: Inventory = object : Inventory {
-        private val items = Array<ItemStack?>(guiInstance.guiData.rows * 9) { ItemStack.EMPTY }
+        private val items = Array<ItemStack?>(54) { ItemStack.EMPTY }
 
         init {
-            guiInstance.layout.forEachIndexed { index, itemStack ->
+            layout.forEachIndexed { index, itemStack ->
                 if (index < size()) items[index] = itemStack
             }
         }
@@ -162,7 +144,7 @@ class CustomScreenHandler(
 
         override fun size() = items.size
         override fun isEmpty() = items.all { it?.isEmpty ?: true }
-        override fun getStack(slot: Int) = items.getOrNull(slot) ?: ItemStack.EMPTY
+        override fun getStack(slot: Int) = items[slot] ?: ItemStack.EMPTY
 
         override fun removeStack(slot: Int, amount: Int): ItemStack {
             val stack = getStack(slot)
@@ -182,9 +164,7 @@ class CustomScreenHandler(
         }
 
         override fun setStack(slot: Int, stack: ItemStack) {
-            if (slot < items.size) {
-                items[slot] = stack
-            }
+            items[slot] = stack
         }
 
         override fun markDirty() {}
@@ -193,25 +173,19 @@ class CustomScreenHandler(
 
     init {
         // Add GUI slots
-        for (row in 0 until guiInstance.guiData.rows) {
-            for (col in 0..8) {
-                val index = col + row * 9
-                addSlot(InteractiveSlot(guiInventory, index, false))
-            }
+        for (i in 0 until guiInventory.size()) {
+            addSlot(InteractiveSlot(guiInventory, i, false))
         }
 
-        // Add player inventory slots if allowed
-        if (allowPlayerInventory) {
-            for (row in 0..2) {
-                for (col in 0..8) {
-                    val index = col + row * 9 + 9
-                    addSlot(Slot(playerInventory, index, 8 + col * 18, 84 + row * 18))
-                }
+        // Add player inventory slots
+        for (i in 0..2) {
+            for (j in 0..8) {
+                val index = j + i * 9 + 9
+                addSlot(Slot(playerInventory, index, 8 + j * 18, 84 + i * 18))
             }
-            // Hotbar
-            for (col in 0..8) {
-                addSlot(Slot(playerInventory, col, 8 + col * 18, 142))
-            }
+        }
+        for (k in 0..8) {
+            addSlot(Slot(playerInventory, k, 8 + k * 18, 142))
         }
     }
 
@@ -222,30 +196,23 @@ class CustomScreenHandler(
         if (isGuiSlot && player is ServerPlayerEntity) {
             val stack = guiInventory.getStack(slotIndex)
             val clickType = if (button == 0) ClickType.LEFT else ClickType.RIGHT
-            val context = InteractionContext(
-                slotIndex = slotIndex,
-                clickType = clickType,
-                button = button,
-                clickedStack = stack,
-                player = player,
-                guiId = guiInstance.guiData.guiId,
-                modId = guiInstance.guiData.modId
-            )
-            guiInstance.onInteract(context)
+            val context = InteractionContext(slotIndex, clickType, button, stack, player)
+            onInteract?.invoke(context)
             return
         }
-
-        if (!allowPlayerInventory) {
-            return
+        if (!isGuiSlot) {
+            super.onSlotClick(slotIndex, button, actionType, player)
         }
-        super.onSlotClick(slotIndex, button, actionType, player)
     }
 
-    override fun quickMove(player: PlayerEntity, index: Int) = ItemStack.EMPTY
+    // Prevent shift-clicking entirely
+    override fun quickMove(player: PlayerEntity, index: Int): ItemStack = ItemStack.EMPTY
 
     override fun onClosed(player: PlayerEntity) {
         super.onClosed(player)
-        guiInstance.onClose(guiInventory)
+        onClose?.invoke(guiInventory)
+        onInteract = null
+        onClose = null
     }
 
     fun updateInventory(newLayout: List<ItemStack>) {
@@ -258,74 +225,20 @@ class CustomScreenHandler(
     }
 }
 
-// Utility class for item creation and manipulation
-object GuiUtils {
-    fun createPlayerHeadButton(title: Text, lore: List<Text>, textureValue: String): ItemStack {
-        val itemStack = ItemStack(Items.PLAYER_HEAD)
-        itemStack.setCustomName(title)
-        itemStack.setLore(lore)
-
-        val profile = GameProfile(UUID.randomUUID(), "custom_head")
-        profile.properties.put("textures", Property("textures", textureValue))
-        itemStack.set(DataComponentTypes.PROFILE, ProfileComponent(profile))
-
-        return itemStack
-    }
-
-    fun createButton(item: ItemStack, displayName: String, lore: List<String>): ItemStack {
-        return item.copy().apply {
-            setCustomName(Text.literal(displayName))
-            setLore(lore.map { Text.literal(it) })
-        }
-    }
-
-    fun ItemStack.setCustomName(name: Text) {
-        this.set(DataComponentTypes.ITEM_NAME, name)
-    }
-
-    fun ItemStack.setLore(lore: List<Text>) {
-        this.set(DataComponentTypes.LORE, LoreComponent(lore))
-    }
-
-    fun ItemStack.addGlint() {
-        this.set(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, true)
-    }
-
-    fun stripFormatting(text: String): String {
-        return text.replace(Regex("§[0-9a-fk-or]"), "")
-    }
+class InteractiveSlot(
+    inventory: Inventory,
+    index: Int,
+    private val isInteractive: Boolean
+) : Slot(
+    inventory,
+    index,
+    8 + (index % 9) * 18,
+    18 + (index / 9) * 18
+) {
+    override fun canInsert(stack: ItemStack) = isInteractive
+    override fun canTakeItems(player: PlayerEntity) = isInteractive
 }
 
-// Example usage:
-/*
-class MyModGui(
-    override val guiId: String = "my_mod_gui",
-    override val modId: String = "my_mod",
-    override val title: String = "My Mod GUI",
-    override val rows: Int = 6,
-    override val allowPlayerInventory: Boolean = true
-) : GuiData
-
-class MyModGuiHandler : GuiHandler {
-    override val guiData = MyModGui()
-
-    override fun createLayout(player: ServerPlayerEntity, customData: Map<String, Any>): List<ItemStack> {
-        // Create your GUI layout
-        return listOf()
-    }
-
-    override fun handleInteraction(context: InteractionContext) {
-        // Handle clicks
-    }
-
-    override fun handleClose(player: ServerPlayerEntity, inventory: Inventory) {
-        // Handle GUI close
-    }
+fun ItemStack.setCustomName(name: Text) {
+    this.set(DataComponentTypes.ITEM_NAME, name)
 }
-
-// Register your GUI:
-GuiRegistry.registerGui(MyModGuiHandler())
-
-// Open your GUI:
-GuiRegistry.openGui(player, "my_mod_gui")
-*/

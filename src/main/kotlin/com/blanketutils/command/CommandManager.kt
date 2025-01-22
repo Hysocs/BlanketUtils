@@ -1,9 +1,13 @@
 package com.blanketutils.command
 
 import com.mojang.brigadier.CommandDispatcher
+import com.mojang.brigadier.builder.ArgumentBuilder
 import com.mojang.brigadier.builder.LiteralArgumentBuilder
+import com.mojang.brigadier.builder.RequiredArgumentBuilder
 import com.mojang.brigadier.context.CommandContext
+import com.mojang.brigadier.suggestion.SuggestionProvider
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
+import net.minecraft.command.CommandSource
 import net.minecraft.server.command.CommandManager.literal
 import net.minecraft.server.command.ServerCommandSource
 import net.minecraft.text.Text
@@ -14,7 +18,7 @@ import org.slf4j.LoggerFactory
 import java.util.function.Supplier
 
 /**
- * Utility class for simplified command registration in Fabric mods
+ * Enhanced utility class for command registration in Fabric mods with full Brigadier support
  */
 class CommandManager(
     private val modId: String,
@@ -25,73 +29,6 @@ class CommandManager(
     private val commands = mutableListOf<CommandData>()
     private val allPermissions = mutableSetOf<String>()
 
-    // Keep track of all permissions for a command and its subcommands
-    private fun collectPermissions(command: CommandData) {
-        allPermissions.add(command.permission)
-        command.subcommands.forEach { subcommand ->
-            collectSubcommandPermissions(subcommand, command.permission)
-        }
-    }
-
-    private fun collectSubcommandPermissions(subcommand: SubcommandData, parentPermission: String) {
-        subcommand.permission?.let { permission ->
-            allPermissions.add(permission)
-        } ?: allPermissions.add(parentPermission)
-
-        subcommand.subcommands.forEach { nestedCommand ->
-            collectSubcommandPermissions(nestedCommand, subcommand.permission ?: parentPermission)
-        }
-    }
-
-    /**
-     * Simulates permission checks for all registered commands
-     * This helps initialize permission systems and verify permissions are registered
-     */
-    fun simulatePermissionChecks(server: MinecraftServer) {
-        logger.info("Simulating permission checks for $modId commands...")
-
-        val players = server.playerManager.playerList
-        if (players.isEmpty()) {
-            logger.info("No players online. Permission simulation will only check console permissions.")
-        }
-
-        // Simulate for all registered permissions
-        allPermissions.forEach { permission ->
-            logger.debug("Simulating checks for permission: $permission")
-
-            // Check for console
-            try {
-                server.commandSource.hasPermissionLevel(defaultOpLevel)
-                logger.debug("Console permission check successful for: $permission")
-            } catch (e: Exception) {
-                logger.warn("Failed to check console permission for: $permission", e)
-            }
-
-            // Check for each player
-            players.forEach { player ->
-                simulatePlayerPermissionCheck(player, permission)
-            }
-        }
-
-        logger.info("Permission simulation completed for ${allPermissions.size} permissions.")
-    }
-
-    private fun simulatePlayerPermissionCheck(player: ServerPlayerEntity, permission: String) {
-        try {
-            // Try LuckPerms/Permissions API
-            try {
-                Permissions.check(player, permission, defaultPermissionLevel)
-                logger.debug("Permission API check successful for player ${player.name.string}: $permission")
-            } catch (e: NoClassDefFoundError) {
-                // Fallback to vanilla op
-                player.hasPermissionLevel(defaultOpLevel)
-                logger.debug("Vanilla permission check successful for player ${player.name.string}: $permission")
-            }
-        } catch (e: Exception) {
-            logger.warn("Failed to check permission for player ${player.name.string}: $permission", e)
-        }
-    }
-
     data class CommandData(
         val name: String,
         val permission: String,
@@ -99,6 +36,7 @@ class CommandManager(
         val opLevel: Int,
         val aliases: List<String>,
         val executor: ((CommandContext<ServerCommandSource>) -> Int)?,
+        val argumentBuilder: (ArgumentBuilder<ServerCommandSource, *>.() -> Unit)?,
         val subcommands: List<SubcommandData>
     )
 
@@ -108,15 +46,37 @@ class CommandManager(
         val permissionLevel: Int?,
         val opLevel: Int?,
         val executor: ((CommandContext<ServerCommandSource>) -> Int)?,
+        val argumentBuilder: (ArgumentBuilder<ServerCommandSource, *>.() -> Unit)?,
         val subcommands: List<SubcommandData>
     )
 
     inner class CommandConfig {
         internal var executor: ((CommandContext<ServerCommandSource>) -> Int)? = null
+        internal var argumentBuilder: (ArgumentBuilder<ServerCommandSource, *>.() -> Unit)? = null
         internal val subcommands = mutableListOf<SubcommandData>()
 
         fun executes(executor: (CommandContext<ServerCommandSource>) -> Int) {
             this.executor = executor
+        }
+
+        fun then(argument: ArgumentBuilder<ServerCommandSource, *>) {
+            val currentBuilder = argumentBuilder
+            argumentBuilder = {
+                if (currentBuilder != null) {
+                    currentBuilder.invoke(this)
+                }
+                then(argument)
+            }
+        }
+
+        fun suggests(provider: SuggestionProvider<ServerCommandSource>) {
+            val currentBuilder = argumentBuilder
+            argumentBuilder = {
+                if (currentBuilder != null) {
+                    currentBuilder.invoke(this)
+                }
+                suggests(provider)
+            }
         }
 
         fun subcommand(
@@ -134,6 +94,7 @@ class CommandManager(
                     permissionLevel = permissionLevel,
                     opLevel = opLevel,
                     executor = config.executor,
+                    argumentBuilder = config.argumentBuilder,
                     subcommands = config.subcommands
                 )
             )
@@ -142,10 +103,31 @@ class CommandManager(
 
     inner class SubcommandConfig {
         internal var executor: ((CommandContext<ServerCommandSource>) -> Int)? = null
+        internal var argumentBuilder: (ArgumentBuilder<ServerCommandSource, *>.() -> Unit)? = null
         internal val subcommands = mutableListOf<SubcommandData>()
 
         fun executes(executor: (CommandContext<ServerCommandSource>) -> Int) {
             this.executor = executor
+        }
+
+        fun then(argument: ArgumentBuilder<ServerCommandSource, *>) {
+            val currentBuilder = argumentBuilder
+            argumentBuilder = {
+                if (currentBuilder != null) {
+                    currentBuilder.invoke(this)
+                }
+                then(argument)
+            }
+        }
+
+        fun suggests(provider: SuggestionProvider<ServerCommandSource>) {
+            val currentBuilder = argumentBuilder
+            argumentBuilder = {
+                if (currentBuilder != null) {
+                    currentBuilder.invoke(this)
+                }
+                suggests(provider)
+            }
         }
 
         fun subcommand(
@@ -163,6 +145,7 @@ class CommandManager(
                     permissionLevel = permissionLevel,
                     opLevel = opLevel,
                     executor = config.executor,
+                    argumentBuilder = config.argumentBuilder,
                     subcommands = config.subcommands
                 )
             )
@@ -186,6 +169,7 @@ class CommandManager(
                 opLevel = opLevel,
                 aliases = aliases,
                 executor = config.executor,
+                argumentBuilder = config.argumentBuilder,
                 subcommands = config.subcommands
             )
         )
@@ -216,6 +200,10 @@ class CommandManager(
 
         commandData.executor?.let { executor ->
             mainCommand.executes(executor)
+        }
+
+        commandData.argumentBuilder?.let { builder ->
+            builder.invoke(mainCommand)
         }
 
         addSubcommands(
@@ -266,6 +254,10 @@ class CommandManager(
                 subNode.executes(executor)
             }
 
+            subcommand.argumentBuilder?.let { builder ->
+                builder.invoke(subNode)
+            }
+
             addSubcommands(
                 subNode,
                 subcommand.subcommands,
@@ -275,6 +267,64 @@ class CommandManager(
             )
 
             node.then(subNode)
+        }
+    }
+
+    // Keep track of all permissions
+    private fun collectPermissions(command: CommandData) {
+        allPermissions.add(command.permission)
+        command.subcommands.forEach { subcommand ->
+            collectSubcommandPermissions(subcommand, command.permission)
+        }
+    }
+
+    private fun collectSubcommandPermissions(subcommand: SubcommandData, parentPermission: String) {
+        subcommand.permission?.let { permission ->
+            allPermissions.add(permission)
+        } ?: allPermissions.add(parentPermission)
+
+        subcommand.subcommands.forEach { nestedCommand ->
+            collectSubcommandPermissions(nestedCommand, subcommand.permission ?: parentPermission)
+        }
+    }
+
+    fun simulatePermissionChecks(server: MinecraftServer) {
+        logger.info("Simulating permission checks for $modId commands...")
+
+        val players = server.playerManager.playerList
+        if (players.isEmpty()) {
+            logger.info("No players online. Permission simulation will only check console permissions.")
+        }
+
+        allPermissions.forEach { permission ->
+            logger.debug("Simulating checks for permission: $permission")
+
+            try {
+                server.commandSource.hasPermissionLevel(defaultOpLevel)
+                logger.debug("Console permission check successful for: $permission")
+            } catch (e: Exception) {
+                logger.warn("Failed to check console permission for: $permission", e)
+            }
+
+            players.forEach { player ->
+                simulatePlayerPermissionCheck(player, permission)
+            }
+        }
+
+        logger.info("Permission simulation completed for ${allPermissions.size} permissions.")
+    }
+
+    private fun simulatePlayerPermissionCheck(player: ServerPlayerEntity, permission: String) {
+        try {
+            try {
+                Permissions.check(player, permission, defaultPermissionLevel)
+                logger.debug("Permission API check successful for player ${player.name.string}: $permission")
+            } catch (e: NoClassDefFoundError) {
+                player.hasPermissionLevel(defaultOpLevel)
+                logger.debug("Vanilla permission check successful for player ${player.name.string}: $permission")
+            }
+        } catch (e: Exception) {
+            logger.warn("Failed to check permission for player ${player.name.string}: $permission", e)
         }
     }
 
@@ -291,7 +341,7 @@ class CommandManager(
             return Text.literal(message).styled { it.withColor(color) }
         }
 
-        private fun hasPermissionOrOp(
+        fun hasPermissionOrOp(
             source: ServerCommandSource,
             permission: String,
             permissionLevel: Int,
@@ -299,17 +349,13 @@ class CommandManager(
         ): Boolean {
             val player = source.player
 
-            // If it's a player, check both permission and op level
             return if (player != null) {
                 try {
-                    // Check if player has permission from permission mod
                     Permissions.check(player, permission, permissionLevel)
                 } catch (e: NoClassDefFoundError) {
-                    // Fallback to op level if no permission mod
                     player.hasPermissionLevel(opLevel)
                 }
             } else {
-                // For non-players (like console), use op level
                 source.hasPermissionLevel(opLevel)
             }
         }

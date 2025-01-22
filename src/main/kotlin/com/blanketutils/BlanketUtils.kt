@@ -1,6 +1,7 @@
 package com.blanketutils
 
 
+import com.blanketutils.command.CommandTester
 import net.fabricmc.api.ModInitializer
 import org.slf4j.LoggerFactory
 import java.time.LocalDateTime
@@ -49,6 +50,7 @@ object BlanketUtils : ModInitializer {
         logger.info("")
         logger.info("$prefix ${Colors.boldPurple("============================")}")
         logger.info("$prefix ${Colors.brightPurple(getModName() + " v$VERSION")}")
+        logger.info("$prefix ${Colors.boldPurple("A Tiny Tool, With Mighty Results.")}")
         logger.info("$prefix ${Colors.brightBlack("Loading at: $timestamp")}")
 
         // Run config tests
@@ -72,9 +74,25 @@ object BlanketUtils : ModInitializer {
                 ) else it.toString()
             }}: ")}$status")
         }
+
+        logger.info("$prefix ${Colors.boldYellow("Running Command System Tests:")}")
+        CommandTester.runAllTests().forEach { (testName, passed) ->
+            val status = if (passed) Colors.boldGreen("GOOD") else Colors.boldRed("BAD")
+            logger.info("$prefix ${Colors.brightBlack("- Test ${testName.replaceFirstChar {
+                if (it.isLowerCase()) it.titlecase(
+                    Locale.getDefault()
+                ) else it.toString()
+            }}: ")}$status")
+        }
+
         logger.info("$prefix ${Colors.boldGreen("Successfully initialized!")}")
         logger.info("$prefix ${Colors.brightBlack("Runtime: ${System.getProperty("java.version")}")}")
-        logger.info("$prefix ${Colors.brightBlack("OS: ${System.getProperty("os.name")}")}")
+        logger.info("$prefix ${Colors.brightBlack("Environment: ${System.getProperty("java.vendor")}")}")
+        logger.info("$prefix ${Colors.brightBlack("Cores Available: ${Runtime.getRuntime().availableProcessors()}")}")
+        logger.info("$prefix ${Colors.brightBlack("Thread Count: ${Thread.activeCount()}")}")
+        logger.info("$prefix ${Colors.brightBlack("Memory: ${Runtime.getRuntime().maxMemory() / 1024 / 1024}MB allocated")}")
+        logger.info("$prefix ${Colors.brightBlack("Report issues at: https://github.com/Hysocs/BlanketUtils")}")
+        logger.info("$prefix ${Colors.brightBlack("Or join our discord at: https://discord.gg/nrENPTmQKt")}")
         logger.info("$prefix ${Colors.boldPurple("============================")}")
 
 

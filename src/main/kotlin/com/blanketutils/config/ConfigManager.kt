@@ -362,7 +362,7 @@ class ConfigManager<T : ConfigData>(
         }
     }
 
-    private suspend fun saveConfig(config: T) = withContext(Dispatchers.IO) {
+    suspend fun saveConfig(config: T) = withContext(Dispatchers.IO) {
         try {
             val content = buildConfigContent(config)
             writeConfigFile(content)
