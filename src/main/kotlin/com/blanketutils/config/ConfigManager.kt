@@ -2,6 +2,7 @@ package com.blanketutils.config
 
 import com.google.gson.*
 import kotlinx.coroutines.*
+import kotlinx.io.IOException
 import org.slf4j.LoggerFactory
 import java.nio.file.*
 import java.nio.file.StandardWatchEventKinds.*
@@ -160,7 +161,7 @@ class ConfigManager<T : ConfigData>(
 
             changed
         } catch (e: Exception) {
-            logger.debug("Error checking file changes: ${e.message}")
+            logger.error("Error checking file changes: ${e.message}")
             false
         }
     }
@@ -186,7 +187,7 @@ class ConfigManager<T : ConfigData>(
                 }
             } catch (e: Exception) {
                 if (e !is CancellationException) {
-                    logger.debug("Config watcher stopped: ${e.message}")
+                    logger.error("Config watcher stopped: ${e.message}")
                 }
             }
         }
@@ -269,34 +270,34 @@ class ConfigManager<T : ConfigData>(
     private suspend fun handleConfigError(reason: String) {
         createBackup(reason)
 
-        // First try to restore from backup
-        restoreFromBackup()?.let { restoredConfig ->
-            configData.set(restoredConfig)
-            lastValidConfig.set(restoredConfig)
-            saveConfig(restoredConfig)
-            logger.debug("Restored configuration from backup after $reason")
-            return
-        }
-
-        // If no backup, use last valid config instead of default
-        val lastKnownGood = lastValidConfig.get()
-        if (lastKnownGood != defaultConfig) {
-            configData.set(lastKnownGood)
-            saveConfig(lastKnownGood)
-            logger.debug("Restored last valid configuration after $reason")
-        } else {
-            // Only use default config if we have no other option
-            configData.set(defaultConfig)
-            saveConfig(defaultConfig)
-            logger.debug("Reset to default configuration after $reason")
+        val restoredConfig = restoreFromBackup()
+        when {
+            restoredConfig != null -> {
+                configData.set(restoredConfig)
+                lastValidConfig.set(restoredConfig)
+                saveConfig(restoredConfig)
+                logger.info("Restored configuration from backup after $reason")
+                return
+            }
+            lastValidConfig.get() != defaultConfig -> {
+                // Use last known good config if available
+                val lastKnownGood = lastValidConfig.get()
+                configData.set(lastKnownGood)
+                saveConfig(lastKnownGood)
+                logger.info("Restored last valid configuration after $reason")
+            }
+            else -> {
+                // Fall back to default config if no other options available
+                configData.set(defaultConfig)
+                saveConfig(defaultConfig)
+                logger.info("Reset to default configuration after $reason - no valid backups or previous configurations available")
+            }
         }
     }
 
     private suspend fun handleVersionMismatch(oldConfig: T) {
         createBackup("pre_migration")
         val currentConfig = configData.get()
-
-        // Merge in this order: oldConfig -> currentConfig -> defaultConfig
         val mergedConfig = mergeConfigs(
             mergeConfigs(oldConfig, currentConfig),
             defaultConfig
@@ -330,34 +331,64 @@ class ConfigManager<T : ConfigData>(
             Files.list(backupDir).use { stream ->
                 stream.filter { it.toString().endsWith(".jsonc") }
                     .sorted(Comparator.reverseOrder())
-                    .skip(5)
+                    .skip(50)
                     .forEach { Files.delete(it) }
             }
         } catch (e: Exception) {
-            logger.debug("Backup failed: ${e.message}")
+            logger.error("Backup failed: ${e.message}")
         }
     }
 
     private suspend fun restoreFromBackup(): T? = withContext(Dispatchers.IO) {
         try {
+            // First check if backup directory exists and has any files
+            if (!Files.exists(backupDir) || Files.list(backupDir).use { it.count() } == 0L) {
+                logger.info("No backups found in directory: ${backupDir}")
+                return@withContext null
+            }
+
             Files.list(backupDir).use { stream ->
-                val latestBackup = stream
+                val backupFiles = stream
                     .filter { it.toString().endsWith(".jsonc") }
-                    .max { a, b ->
-                        a.fileName.toString().compareTo(b.fileName.toString())
-                    }
-                    .orElse(null)
+                    .collect(Collectors.toList())
+
+                if (backupFiles.isEmpty()) {
+                    logger.info("No .jsonc backup files found in directory: ${backupDir}")
+                    return@withContext null
+                }
+
+                val latestBackup = backupFiles.maxByOrNull {
+                    Files.getLastModifiedTime(it).toMillis()
+                }
 
                 latestBackup?.let {
-                    val content = Files.newBufferedReader(it, Charsets.UTF_8).use { reader ->
-                        reader.readText()
+                    try {
+                        val content = Files.newBufferedReader(it, Charsets.UTF_8).use { reader ->
+                            reader.readText()
+                        }
+
+                        if (content.isBlank()) {
+                            logger.warn("Backup file is empty: ${it.fileName}")
+                            return@withContext null
+                        }
+
+                        val (jsonContent, _) = parser.parseWithComments(content)
+                        try {
+                            val restoredConfig = gson.fromJson(jsonContent, configClass.java)
+                            logger.info("Successfully restored config from backup: ${it.fileName}")
+                            restoredConfig
+                        } catch (e: JsonSyntaxException) {
+                            logger.warn("Invalid JSON in backup file ${it.fileName}: ${e.message}")
+                            null
+                        }
+                    } catch (e: IOException) {
+                        logger.warn("Failed to read backup file ${it.fileName}: ${e.message}")
+                        null
                     }
-                    val (jsonContent, _) = parser.parseWithComments(content)
-                    gson.fromJson(jsonContent, configClass.java)
                 }
             }
         } catch (e: Exception) {
-            logger.debug("Failed to restore from backup: ${e.message}")
+            logger.error("Failed to restore from backup: ${e.message}")
             null
         }
     }
@@ -368,7 +399,7 @@ class ConfigManager<T : ConfigData>(
             writeConfigFile(content)
             lastSavedHash.set(config.hashCode())
         } catch (e: Exception) {
-            logger.debug("Save failed: ${e.message}")
+            logger.error("Save failed: ${e.message}")
         }
     }
 
@@ -379,26 +410,71 @@ class ConfigManager<T : ConfigData>(
         val jsonContent = gson.toJson(config)
         val jsonObject = JsonParser.parseString(jsonContent).asJsonObject
 
-        jsonObject.entrySet().toList().forEachIndexed { index, (key, value) ->
-            val isLast = index == jsonObject.size() - 1
-            append("\n")
-
-            metadata.sectionComments[key]?.let { sectionComment ->
-                sectionComment.lines().forEach { line ->
-                    append("  // $line\n")
-                }
-            }
-
-            currentComments[key]?.let { comment ->
-                append("  // $comment\n")
-            }
-
-            append("  \"$key\": ${gson.toJson(value)}")
-            if (!isLast) append(",")
-        }
+        appendJsonObjectWithComments(jsonObject, "", 1)
 
         append("\n}")
         append(buildFooterComment())
+    }
+
+    private fun StringBuilder.appendJsonObjectWithComments(
+        jsonObject: JsonObject,
+        path: String,
+        indent: Int
+    ) {
+        val indentation = "  ".repeat(indent)
+
+        jsonObject.entrySet().toList().forEachIndexed { index, (key, value) ->
+            val currentPath = if (path.isEmpty()) key else "$path.$key"
+            val isLast = index == jsonObject.size() - 1
+
+            append("\n")
+
+            metadata.sectionComments[currentPath]?.let { sectionComment ->
+                sectionComment.lines().forEach { line ->
+                    append("$indentation// $line\n")
+                }
+            }
+
+            currentComments[currentPath]?.let { comment ->
+                append("$indentation// $comment\n")
+            }
+
+            append("$indentation\"$key\": ")
+
+            when {
+                value.isJsonObject -> {
+                    append("{")
+                    appendJsonObjectWithComments(value.asJsonObject, currentPath, indent + 1)
+                    append("\n$indentation}")
+                }
+                value.isJsonArray -> {
+                    val arrayContent = formatJsonArray(value.asJsonArray, indent + 1)
+                    append(arrayContent)
+                }
+                else -> {
+                    append(gson.toJson(value))
+                }
+            }
+
+            if (!isLast) append(",")
+        }
+    }
+
+    private fun formatJsonArray(array: JsonArray, indent: Int): String {
+        if (array.size() == 0) return "[]"
+
+        val indentation = "  ".repeat(indent)
+        return buildString {
+            append("[\n")
+            array.forEachIndexed { index, element ->
+                append(indentation)
+                append(gson.toJson(element))
+                if (index < array.size() - 1) append(",")
+                append("\n")
+            }
+            append("  ".repeat(indent - 1))
+            append("]")
+        }
     }
 
     private fun buildHeaderComment(): String = buildString {
