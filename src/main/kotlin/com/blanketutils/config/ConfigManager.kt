@@ -94,7 +94,8 @@ class ConfigManager<T : ConfigData>(
     private val defaultConfig: T,
     private val configClass: KClass<T>,
     private val configDir: Path = Paths.get("config"),
-    private val metadata: ConfigMetadata = ConfigMetadata.default(defaultConfig.configId)
+    private val metadata: ConfigMetadata = ConfigMetadata.default(defaultConfig.configId),
+    private val isTesting: Boolean = false  // Add testing flag
 ) {
     private val logger = LoggerFactory.getLogger("ConfigManager-${defaultConfig.configId}")
     private val configFile = configDir.resolve("${defaultConfig.configId}/config.jsonc")
@@ -108,6 +109,17 @@ class ConfigManager<T : ConfigData>(
     private val currentComments = ConcurrentHashMap<String, String>()
     private val lastModifiedTime = AtomicLong(0)
     private val lastFileSize = AtomicLong(0)
+
+    private fun logIfNotTesting(level: String, message: String) {
+        if (!isTesting) {
+            when (level) {
+                "error" -> logger.error(message)
+                "warn" -> logger.warn(message)
+                "info" -> logger.info(message)
+                else -> logger.debug(message)
+            }
+        }
+    }
 
     private val gson = GsonBuilder()
         .setPrettyPrinting()
@@ -270,30 +282,23 @@ class ConfigManager<T : ConfigData>(
     private suspend fun handleConfigError(reason: String) {
         createBackup(reason)
 
-        val restoredConfig = restoreFromBackup()
-        when {
-            restoredConfig != null -> {
-                configData.set(restoredConfig)
-                lastValidConfig.set(restoredConfig)
-                saveConfig(restoredConfig)
-                logger.info("Restored configuration from backup after $reason")
-                return
-            }
-            lastValidConfig.get() != defaultConfig -> {
-                // Use last known good config if available
-                val lastKnownGood = lastValidConfig.get()
-                configData.set(lastKnownGood)
-                saveConfig(lastKnownGood)
-                logger.info("Restored last valid configuration after $reason")
-            }
-            else -> {
-                // Fall back to default config if no other options available
-                configData.set(defaultConfig)
-                saveConfig(defaultConfig)
-                logger.info("Reset to default configuration after $reason - no valid backups or previous configurations available")
-            }
+        restoreFromBackup()?.let { restoredConfig ->
+            configData.set(restoredConfig)
+            lastValidConfig.set(restoredConfig)
+            saveConfig(restoredConfig)
+            return
+        }
+
+        val lastKnownGood = lastValidConfig.get()
+        if (lastKnownGood != defaultConfig) {
+            configData.set(lastKnownGood)
+            saveConfig(lastKnownGood)
+        } else {
+            configData.set(defaultConfig)
+            saveConfig(defaultConfig)
         }
     }
+
 
     private suspend fun handleVersionMismatch(oldConfig: T) {
         createBackup("pre_migration")
@@ -341,54 +346,34 @@ class ConfigManager<T : ConfigData>(
 
     private suspend fun restoreFromBackup(): T? = withContext(Dispatchers.IO) {
         try {
-            // First check if backup directory exists and has any files
             if (!Files.exists(backupDir) || Files.list(backupDir).use { it.count() } == 0L) {
-                logger.info("No backups found in directory: ${backupDir}")
+                logIfNotTesting("info", "No backups found in directory: ${backupDir}")
                 return@withContext null
             }
 
             Files.list(backupDir).use { stream ->
-                val backupFiles = stream
+                val latestBackup = stream
                     .filter { it.toString().endsWith(".jsonc") }
-                    .collect(Collectors.toList())
-
-                if (backupFiles.isEmpty()) {
-                    logger.info("No .jsonc backup files found in directory: ${backupDir}")
-                    return@withContext null
-                }
-
-                val latestBackup = backupFiles.maxByOrNull {
-                    Files.getLastModifiedTime(it).toMillis()
-                }
+                    .max { a, b ->
+                        a.fileName.toString().compareTo(b.fileName.toString())
+                    }
+                    .orElse(null)
 
                 latestBackup?.let {
                     try {
                         val content = Files.newBufferedReader(it, Charsets.UTF_8).use { reader ->
                             reader.readText()
                         }
-
-                        if (content.isBlank()) {
-                            logger.warn("Backup file is empty: ${it.fileName}")
-                            return@withContext null
-                        }
-
                         val (jsonContent, _) = parser.parseWithComments(content)
-                        try {
-                            val restoredConfig = gson.fromJson(jsonContent, configClass.java)
-                            logger.info("Successfully restored config from backup: ${it.fileName}")
-                            restoredConfig
-                        } catch (e: JsonSyntaxException) {
-                            logger.warn("Invalid JSON in backup file ${it.fileName}: ${e.message}")
-                            null
-                        }
-                    } catch (e: IOException) {
-                        logger.warn("Failed to read backup file ${it.fileName}: ${e.message}")
+                        gson.fromJson(jsonContent, configClass.java)
+                    } catch (e: Exception) {
+                        logIfNotTesting("warn", "Failed to restore from backup: ${e.message}")
                         null
                     }
                 }
             }
         } catch (e: Exception) {
-            logger.error("Failed to restore from backup: ${e.message}")
+            logIfNotTesting("error", "Failed to restore from backup: ${e.message}")
             null
         }
     }

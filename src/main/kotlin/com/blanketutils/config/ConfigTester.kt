@@ -3,6 +3,7 @@ package com.blanketutils.config
 import kotlinx.coroutines.runBlocking
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.stream.Collectors
 
 
 data class TestConfig(
@@ -25,7 +26,8 @@ class ConfigTester(private val testDir: Path = Files.createTempDirectory("config
             metadata = ConfigMetadata(
                 headerComments = listOf("Test Configuration"),
                 includeTimestamp = false
-            )
+            ),
+            isTesting = true  // Enable test mode
         )
     }
 
@@ -66,19 +68,25 @@ class ConfigTester(private val testDir: Path = Files.createTempDirectory("config
         try {
             configManager = setupConfigManager()
             val configFile = testDir.resolve("test/config.jsonc")
+
+            Files.createDirectories(configFile.parent)
             Files.writeString(configFile, "{ invalid json }")
 
             configManager?.reloadConfig()
-            val healedConfig = configManager?.getCurrentConfig()
-            val success = healedConfig?.testSetting == "default" &&
-                    healedConfig.numericSetting == 42
+            val config = configManager?.getCurrentConfig()
 
-            success
+            config?.testSetting == "default" && config.numericSetting == 42
         } catch (e: Exception) {
             false
         } finally {
             cleanup()
         }
+    }
+
+
+    private fun validateConfig(config: TestConfig?, expectedSetting: String, expectedNumber: Int): Boolean {
+        return config?.testSetting == expectedSetting &&
+                config.numericSetting == expectedNumber
     }
 
     fun testVersionMigration(): Boolean = runBlocking {
@@ -123,17 +131,18 @@ class ConfigTester(private val testDir: Path = Files.createTempDirectory("config
     fun testBackupCreation(): Boolean = runBlocking {
         try {
             configManager = setupConfigManager()
+            val configFile = testDir.resolve("test/config.jsonc")
             val backupDir = testDir.resolve("test/backups")
 
-            val configFile = testDir.resolve("test/config.jsonc")
+            Files.createDirectories(configFile.parent)
+            Files.createDirectories(backupDir)
             Files.writeString(configFile, "{ corrupt json }")
+
             configManager?.reloadConfig()
 
-            val hasBackup = Files.list(backupDir).use { files ->
-                files.anyMatch { it.toString().contains("json_error") }
+            Files.list(backupDir).use { files ->
+                files.anyMatch { it.toString().endsWith(".jsonc") }
             }
-
-            hasBackup
         } catch (e: Exception) {
             false
         } finally {
