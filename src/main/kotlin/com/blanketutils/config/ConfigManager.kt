@@ -390,77 +390,41 @@ class ConfigManager<T : ConfigData>(
 
     private fun buildConfigContent(config: T): String = buildString {
         append(buildHeaderComment())
-        append("\n{")
 
-        val jsonContent = gson.toJson(config)
-        val jsonObject = JsonParser.parseString(jsonContent).asJsonObject
+        // Let Gson handle the JSON formatting
+        val jsonContent = gson.toJson(JsonParser.parseString(gson.toJson(config)))
 
-        appendJsonObjectWithComments(jsonObject, "", 1)
+        // Split the formatted JSON into lines
+        val lines = jsonContent.lines()
 
-        append("\n}")
+        // Process each line and add comments where needed
+        lines.forEachIndexed { index, line ->
+            val trimmedLine = line.trim()
+            if (trimmedLine.isNotEmpty()) {
+                // Extract the property name if this line contains one
+                val propertyName = trimmedLine.substringBefore(":").trim().removeSurrounding("\"")
+                val currentPath = propertyName // You might need to build the full path here
+
+                // Add section comments if they exist
+                metadata.sectionComments[currentPath]?.let { comment ->
+                    append(line.substringBefore(trimmedLine))  // Preserve indentation
+                    append("// $comment\n")
+                }
+
+                // Add inline comments if they exist
+                currentComments[currentPath]?.let { comment ->
+                    append(line.substringBefore(trimmedLine))  // Preserve indentation
+                    append("// $comment\n")
+                }
+
+                append(line)
+                if (index < lines.size - 1) append("\n")
+            }
+        }
+
         append(buildFooterComment())
     }
 
-    private fun StringBuilder.appendJsonObjectWithComments(
-        jsonObject: JsonObject,
-        path: String,
-        indent: Int
-    ) {
-        val indentation = "  ".repeat(indent)
-
-        jsonObject.entrySet().toList().forEachIndexed { index, (key, value) ->
-            val currentPath = if (path.isEmpty()) key else "$path.$key"
-            val isLast = index == jsonObject.size() - 1
-
-            append("\n")
-
-            metadata.sectionComments[currentPath]?.let { sectionComment ->
-                sectionComment.lines().forEach { line ->
-                    append("$indentation// $line\n")
-                }
-            }
-
-            currentComments[currentPath]?.let { comment ->
-                append("$indentation// $comment\n")
-            }
-
-            append("$indentation\"$key\": ")
-
-            when {
-                value.isJsonObject -> {
-                    append("{")
-                    appendJsonObjectWithComments(value.asJsonObject, currentPath, indent + 1)
-                    append("\n$indentation}")
-                }
-                value.isJsonArray -> {
-                    val arrayContent = formatJsonArray(value.asJsonArray, indent + 1)
-                    append(arrayContent)
-                }
-                else -> {
-                    append(gson.toJson(value))
-                }
-            }
-
-            if (!isLast) append(",")
-        }
-    }
-
-    private fun formatJsonArray(array: JsonArray, indent: Int): String {
-        if (array.size() == 0) return "[]"
-
-        val indentation = "  ".repeat(indent)
-        return buildString {
-            append("[\n")
-            array.forEachIndexed { index, element ->
-                append(indentation)
-                append(gson.toJson(element))
-                if (index < array.size() - 1) append(",")
-                append("\n")
-            }
-            append("  ".repeat(indent - 1))
-            append("]")
-        }
-    }
 
     private fun buildHeaderComment(): String = buildString {
         append("/* CONFIG_SECTION\n")
