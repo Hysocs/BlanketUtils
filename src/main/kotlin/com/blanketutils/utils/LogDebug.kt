@@ -12,7 +12,7 @@ object LogDebug {
      */
     fun init(modId: String, debugEnabled: Boolean = false) {
         debugStates[modId] = debugEnabled
-        println("[DEBUG-$modId] Initialized debug state: ${if (debugEnabled) "enabled" else "disabled"}")
+        //println("[DEBUG-$modId] Initialized debug state: ${if (debugEnabled) "enabled" else "disabled"}")
     }
 
     /**
@@ -22,7 +22,7 @@ object LogDebug {
      */
     fun debug(message: String, source: String) {
         if (isDebugEnabledForMod(source)) {
-            println("[DEBUG-$source] $message")
+            //println("[DEBUG-$source] $message")
         }
     }
 
@@ -37,7 +37,7 @@ object LogDebug {
 
         // Only print if the state actually changed
         if (previousState != enabled) {
-            println("[DEBUG-$modId] Debug mode ${if (enabled) "enabled" else "disabled"}")
+            //println("[DEBUG-$modId] Debug mode ${if (enabled) "enabled" else "disabled"}")
         }
     }
 
