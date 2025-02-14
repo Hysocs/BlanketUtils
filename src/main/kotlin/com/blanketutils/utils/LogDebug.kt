@@ -1,104 +1,57 @@
 package com.blanketutils.utils
 
-import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
 
 object LogDebug {
-    private val loggers = ConcurrentHashMap<String, org.slf4j.Logger>()
-    private var isDebugEnabled = false
-    private var defaultLogLevel = LogLevel.ERROR
+    private val debugStates = ConcurrentHashMap<String, Boolean>()
 
-    enum class LogLevel {
-        ERROR,
-        WARN,
-        INFO,
-        DEBUG,
-        TRACE
+    /**
+     * Initialize debug state for a specific mod
+     * @param modId The mod identifier
+     * @param debugEnabled Whether debug is enabled for this mod
+     */
+    fun init(modId: String, debugEnabled: Boolean = false) {
+        debugStates[modId] = debugEnabled
+        println("[DEBUG-$modId] Initialized debug state: ${if (debugEnabled) "enabled" else "disabled"}")
     }
 
     /**
-     * Initialize the logging system
-     * @param debugEnabled Whether debug logging is enabled
-     * @param level Default log level to use
+     * Print a debug message if debug is enabled for the source mod
+     * @param message The message to print
+     * @param source The source mod ID
      */
-    fun init(debugEnabled: Boolean = false, level: LogLevel = LogLevel.ERROR) {
-        isDebugEnabled = debugEnabled
-        defaultLogLevel = level
-    }
-
-    /**
-     * Log a debug message if debug is enabled
-     * @param message The message to log
-     * @param source The source of the log message (defaults to "blanketutils")
-     */
-    fun debug(message: String, source: String = "blanketutils") {
-        if (isDebugEnabled) {
-            getLogger(source).debug(message)
+    fun debug(message: String, source: String) {
+        if (isDebugEnabledForMod(source)) {
+            println("[DEBUG-$source] $message")
         }
     }
 
     /**
-     * Log an error message
-     * @param message The message to log
-     * @param source The source of the log message (defaults to "blanketutils")
+     * Set the debug state for a specific mod
+     * @param modId The mod identifier
+     * @param enabled Whether debug should be enabled
      */
-    fun error(message: String, source: String = "blanketutils") {
-        getLogger(source).error(message)
-    }
+    fun setDebugEnabledForMod(modId: String, enabled: Boolean) {
+        val previousState = debugStates[modId]
+        debugStates[modId] = enabled
 
-    /**
-     * Log a warning message
-     * @param message The message to log
-     * @param source The source of the log message (defaults to "blanketutils")
-     */
-    fun warn(message: String, source: String = "blanketutils") {
-        getLogger(source).warn(message)
-    }
-
-    /**
-     * Log an info message
-     * @param message The message to log
-     * @param source The source of the log message (defaults to "blanketutils")
-     */
-    fun info(message: String, source: String = "blanketutils") {
-        getLogger(source).info(message)
-    }
-
-    /**
-     * Log a message at the current default level
-     * @param message The message to log
-     * @param source The source of the log message (defaults to "blanketutils")
-     */
-    operator fun invoke(message: String, source: String = "blanketutils") {
-        when (defaultLogLevel) {
-            LogLevel.ERROR -> error(message, source)
-            LogLevel.WARN -> warn(message, source)
-            LogLevel.INFO -> info(message, source)
-            LogLevel.DEBUG -> debug(message, source)
-            LogLevel.TRACE -> getLogger(source).trace(message)
+        // Only print if the state actually changed
+        if (previousState != enabled) {
+            println("[DEBUG-$modId] Debug mode ${if (enabled) "enabled" else "disabled"}")
         }
     }
 
-    private fun getLogger(source: String): org.slf4j.Logger {
-        return loggers.computeIfAbsent(source) { LoggerFactory.getLogger(it) }
-    }
-
     /**
-     * Set the debug state
-     * @param enabled Whether debug logging should be enabled
+     * Check if debug is enabled for a specific mod
+     * @param modId The mod identifier
+     * @return Whether debug is enabled for the mod
      */
-    fun setDebugEnabled(enabled: Boolean) {
-        isDebugEnabled = enabled
-    }
-
-    /**
-     * Set the default log level
-     * @param level The log level to use by default
-     */
-    fun setDefaultLogLevel(level: LogLevel) {
-        defaultLogLevel = level
+    fun isDebugEnabledForMod(modId: String): Boolean {
+        return debugStates[modId] ?: false
     }
 }
 
-// Extension function to make it easier to use in other classes
-fun logDebug(message: String, source: String = "blanketutils") = LogDebug.debug(message, source)
+// Extension function for easier use
+fun logDebug(message: String, source: String) {
+    LogDebug.debug(message, source)
+}

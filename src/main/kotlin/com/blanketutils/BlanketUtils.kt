@@ -11,6 +11,7 @@ import com.blanketutils.config.ConfigData
 import com.blanketutils.config.ConfigManager
 import com.blanketutils.config.ConfigTester
 import com.blanketutils.gui.GuiTester
+import com.blanketutils.utils.LogDebugTester
 import java.nio.file.Paths
 import java.util.*
 
@@ -82,6 +83,15 @@ object BlanketUtils : ModInitializer {
                 if (it.isLowerCase()) it.titlecase(
                     Locale.getDefault()
                 ) else it.toString()
+            }}: ")}$status")
+        }
+
+        // Add LogDebug tests
+        logger.info("$prefix ${Colors.boldYellow("Running LogDebug System Tests:")}")
+        LogDebugTester.runAllTests().forEach { (testName, passed) ->
+            val status = if (passed) Colors.boldGreen("GOOD") else Colors.boldRed("BAD")
+            logger.info("$prefix ${Colors.brightBlack("- Test ${testName.replaceFirstChar {
+                if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString()
             }}: ")}$status")
         }
 
