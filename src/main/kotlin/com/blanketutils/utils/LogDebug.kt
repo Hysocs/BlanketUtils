@@ -22,7 +22,7 @@ object LogDebug {
      */
     fun debug(message: String, source: String) {
         if (isDebugEnabledForMod(source)) {
-            //println("[DEBUG-$source] $message")
+            println("[DEBUG-$source] $message")
         }
     }
 

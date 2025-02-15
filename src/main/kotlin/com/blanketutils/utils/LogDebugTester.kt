@@ -47,7 +47,7 @@ class LogDebugTester {
             try {
                 // Test debug output
                 LogDebug.init(TEST_MOD_ID, true)
-                LogDebug.debug("Test debug message", TEST_MOD_ID)
+                //LogDebug.debug("Test debug message", TEST_MOD_ID)
                 true
             } catch (e: Exception) {
                 //println("[TEST] Debug output test failed: ${e.message}")

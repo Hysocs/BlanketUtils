@@ -392,7 +392,8 @@ class ConfigManager<T : ConfigData>(
         append(buildHeaderComment())
 
         // Let Gson handle the JSON formatting
-        val jsonContent = gson.toJson(JsonParser.parseString(gson.toJson(config)))
+        val jsonElement = JsonParser().parse(gson.toJson(config))
+        val jsonContent = gson.toJson(jsonElement)
 
         // Split the formatted JSON into lines
         val lines = jsonContent.lines()
