@@ -2,7 +2,9 @@ package com.blanketutils
 
 
 import com.blanketutils.command.CommandTester
+import com.blanketutils.scheduling.SchedulerManager
 import net.fabricmc.api.ModInitializer
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents
 import org.slf4j.LoggerFactory
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -11,6 +13,7 @@ import com.blanketutils.config.ConfigData
 import com.blanketutils.config.ConfigManager
 import com.blanketutils.config.ConfigTester
 import com.blanketutils.gui.GuiTester
+import com.blanketutils.scheduling.SchedulerTester
 import com.blanketutils.utils.LogDebugTester
 import java.nio.file.Paths
 import java.util.*
@@ -18,7 +21,7 @@ import java.util.*
 object BlanketUtils : ModInitializer {
     private val logger = LoggerFactory.getLogger("blanketutils")
     const val MOD_ID = "blanketutils"
-    const val VERSION = "1.0.0"
+    const val VERSION = "1.0.2"
 
     // ANSI color and format codes
     object Colors {
@@ -53,6 +56,12 @@ object BlanketUtils : ModInitializer {
         logger.info("$prefix ${Colors.brightPurple(getModName() + " v$VERSION")}")
         logger.info("$prefix ${Colors.boldPurple("A Tiny Tool, With Mighty Results.")}")
         logger.info("$prefix ${Colors.brightBlack("Loading at: $timestamp")}")
+
+        // Register server lifecycle event to clean up schedulers on server stop
+        ServerLifecycleEvents.SERVER_STOPPING.register { server ->
+            logger.info("$prefix ${Colors.brightBlack("Server stopping - shutting down all schedulers")}")
+            SchedulerManager.shutdownAll()
+        }
 
         // Run config tests
         val results = ConfigTester.runAllTests()
@@ -89,6 +98,15 @@ object BlanketUtils : ModInitializer {
         // Add LogDebug tests
         logger.info("$prefix ${Colors.boldYellow("Running LogDebug System Tests:")}")
         LogDebugTester.runAllTests().forEach { (testName, passed) ->
+            val status = if (passed) Colors.boldGreen("GOOD") else Colors.boldRed("BAD")
+            logger.info("$prefix ${Colors.brightBlack("- Test ${testName.replaceFirstChar {
+                if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString()
+            }}: ")}$status")
+        }
+
+        // Add this after the other tests
+        logger.info("$prefix ${Colors.boldYellow("Running Scheduler System Tests:")}")
+        SchedulerTester.runAllTests().forEach { (testName, passed) ->
             val status = if (passed) Colors.boldGreen("GOOD") else Colors.boldRed("BAD")
             logger.info("$prefix ${Colors.brightBlack("- Test ${testName.replaceFirstChar {
                 if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString()
