@@ -1,7 +1,5 @@
 package com.blanketutils.gui
 
-import net.minecraft.component.DataComponentTypes
-import net.minecraft.component.type.LoreComponent
 import net.minecraft.entity.player.PlayerEntity
 import net.minecraft.entity.player.PlayerInventory
 import net.minecraft.inventory.Inventory
@@ -9,7 +7,6 @@ import net.minecraft.inventory.SimpleInventory
 import net.minecraft.item.ItemStack
 import net.minecraft.item.Items
 import net.minecraft.screen.*
-import net.minecraft.screen.slot.Slot
 import net.minecraft.screen.slot.SlotActionType
 import net.minecraft.server.network.ServerPlayerEntity
 import net.minecraft.text.Text
@@ -17,22 +14,58 @@ import net.minecraft.util.ClickType
 import org.slf4j.LoggerFactory
 
 /**
- * A manager for creating customizable anvil GUIs
+ * A fully modular anvil GUI manager
  */
 object AnvilGuiManager {
     private val logger = LoggerFactory.getLogger(AnvilGuiManager::class.java)
 
     /**
-     * Opens a modular anvil GUI for the specified player
+     * Opens a fully modular anvil GUI
      *
      * @param player The player to open the GUI for
      * @param id A unique identifier for this GUI
      * @param title The title displayed in the GUI
-     * @param initialText The initial text to show in the text field (can be empty)
-     * @param layout A map of slot indices to ItemStacks
-     * @param onInteract Handler for when slots are clicked
+     * @param initialText The initial text in the input field
+     * @param leftItem Item to place in left slot (slot 0)
+     * @param rightItem Item to place in right slot (slot 1)
+     * @param resultItem Item to place in result slot (slot 2)
+     * @param onLeftClick Handler for left slot clicks
+     * @param onRightClick Handler for right slot clicks
+     * @param onResultClick Handler for result slot clicks
      * @param onTextChange Handler for when the text field is modified
      * @param onClose Handler for when the GUI is closed
+     */
+    fun openAnvilGui(
+        player: ServerPlayerEntity,
+        id: String,
+        title: String,
+        initialText: String = "",
+        leftItem: ItemStack? = null,
+        rightItem: ItemStack? = null,
+        resultItem: ItemStack? = null,
+        onLeftClick: ((AnvilInteractionContext) -> Unit)? = null,
+        onRightClick: ((AnvilInteractionContext) -> Unit)? = null,
+        onResultClick: ((AnvilInteractionContext) -> Unit)? = null,
+        onTextChange: ((String) -> Unit)? = null,
+        onClose: ((Inventory) -> Unit)? = null
+    ) {
+        val factory = SimpleNamedScreenHandlerFactory(
+            { syncId, inv, _ ->
+                FullyModularAnvilScreenHandler(
+                    syncId, inv, id,
+                    initialText,
+                    leftItem, rightItem, resultItem,
+                    onLeftClick, onRightClick, onResultClick,
+                    onTextChange, onClose
+                )
+            },
+            Text.literal(title)
+        )
+        player.openHandledScreen(factory)
+    }
+
+    /**
+     * Alternate version with a map-based layout and unified click handler
      */
     fun openAnvilGui(
         player: ServerPlayerEntity,
@@ -44,65 +77,19 @@ object AnvilGuiManager {
         onTextChange: ((String) -> Unit)? = null,
         onClose: ((Inventory) -> Unit)? = null
     ) {
-        val factory = SimpleNamedScreenHandlerFactory(
-            { syncId, inv, _ ->
-                ModularAnvilScreenHandler(
-                    syncId, inv, id,
-                    initialText, layout,
-                    onInteract, onTextChange, onClose
-                )
-            },
-            Text.literal(title)
-        )
-        player.openHandledScreen(factory)
-    }
-
-    /**
-     * Simplified method for opening a search anvil GUI (for backward compatibility)
-     */
-    fun openSearchGui(
-        player: ServerPlayerEntity,
-        id: String,
-        title: String,
-        onSearch: (String) -> Unit,
-        cancelAction: (() -> Unit)? = null
-    ) {
-        // Create a layout with appropriate items
-        val layout = mutableMapOf<Int, ItemStack>()
-
-        // Add a cancel button if cancelAction is provided
-        if (cancelAction != null) {
-            val cancelButton = ItemStack(Items.BARRIER)
-            cancelButton.setCustomName(Text.literal("Cancel"))
-            CustomGui.setItemLore(cancelButton, listOf(
-                "§cClick to cancel and go back",
-                "§7No search will be performed"
-            ))
-            layout[1] = cancelButton  // Put cancel button in right input slot
-        }
-
-        // Open the anvil GUI
         openAnvilGui(
             player = player,
             id = id,
             title = title,
-            initialText = "",
-            layout = layout,
-            onInteract = { context ->
-                // Handle cancel button click
-                if (context.slotIndex == 1 && cancelAction != null) {
-                    cancelAction.invoke()
-                    context.player.closeHandledScreen()
-                }
-                // Handle result click (perform search)
-                else if (context.slotIndex == 2) {
-                    onSearch.invoke(context.handler.currentText)
-                    context.player.closeHandledScreen()
-                }
-            },
-            onTextChange = { text ->
-                // You could potentially add text validation here if needed
-            }
+            initialText = initialText,
+            leftItem = layout[0],
+            rightItem = layout[1],
+            resultItem = layout[2],
+            onLeftClick = onInteract?.let { handler -> { context -> handler(context) } },
+            onRightClick = onInteract?.let { handler -> { context -> handler(context) } },
+            onResultClick = onInteract?.let { handler -> { context -> handler(context) } },
+            onTextChange = onTextChange,
+            onClose = onClose
         )
     }
 }
@@ -116,19 +103,25 @@ data class AnvilInteractionContext(
     val button: Int,
     val clickedStack: ItemStack,
     val player: ServerPlayerEntity,
-    val handler: ModularAnvilScreenHandler
+    val handler: FullyModularAnvilScreenHandler
 )
 
 /**
- * A custom anvil screen handler that provides modular functionality
+ * A fully modular anvil screen handler where all slots are buttons and text input is independent.
+ * This version ensures that non-output slots (left and right) do not carry a custom title,
+ * thus preventing auto-filling of the text field with item names.
  */
-class ModularAnvilScreenHandler(
+class FullyModularAnvilScreenHandler(
     syncId: Int,
     playerInventory: PlayerInventory,
     private val id: String,
     initialText: String,
-    layout: Map<Int, ItemStack>,
-    private val onInteract: ((AnvilInteractionContext) -> Unit)?,
+    leftItem: ItemStack?,
+    rightItem: ItemStack?,
+    resultItem: ItemStack?,
+    private val onLeftClick: ((AnvilInteractionContext) -> Unit)?,
+    private val onRightClick: ((AnvilInteractionContext) -> Unit)?,
+    private val onResultClick: ((AnvilInteractionContext) -> Unit)?,
     private val onTextChange: ((String) -> Unit)?,
     private val onClose: ((Inventory) -> Unit)?
 ) : AnvilScreenHandler(syncId, playerInventory, ScreenHandlerContext.EMPTY) {
@@ -136,81 +129,106 @@ class ModularAnvilScreenHandler(
     private val guiInventory = SimpleInventory(3)  // Anvil has 3 slots
     var currentText: String = initialText
         private set
+    private var isInitializing = true
 
     init {
-        // Set up the input left slot (text field trigger)
-        val textFieldTrigger = ItemStack(Items.PAPER).apply {
+        // Forcibly clear the text field first
+        setNewItemName("")
+
+        // Set up the invisible text field trigger
+        val hiddenTextTrigger = ItemStack(Items.PAPER).apply {
             setCustomName(Text.literal(""))
         }
-        input.setStack(0, textFieldTrigger)
 
-        // Apply custom layout
-        layout.forEach { (slot, item) ->
-            if (slot in 0..2) {  // Only slots 0, 1, 2 are valid in anvil
-                input.setStack(if (slot < 2) slot else 0, item) // 0, 1 go in input, 2 will be handled by updateResult
-            }
+        // First place a blank paper in slot 0 to initialize properly
+        input.setStack(0, hiddenTextTrigger)
+
+        // Clear text field again
+        setNewItemName("")
+
+        // Place items in slots, ensuring non-output items have no title (only lore)
+        if (leftItem != null) {
+            input.setStack(0, removeTitle(leftItem))
         }
 
-        // Initialize text field
-        setNewItemName(initialText)
-    }
+        if (rightItem != null) {
+            input.setStack(1, removeTitle(rightItem))
+        } else {
+            input.setStack(1, ItemStack.EMPTY)
+        }
 
-    override fun setNewItemName(newName: String): Boolean {
-        val result = super.setNewItemName(newName)
-        currentText = newName
-        onTextChange?.invoke(newName)
-        updateResult()
-        return result
-    }
-
-    override fun updateResult() {
-        // If we have a custom slot 2 item in the layout, use it
-        // Otherwise, create a default result item based on the text
-        if (currentText.isNotEmpty()) {
-            val resultItem = ItemStack(Items.PAPER)
-            resultItem.setCustomName(Text.literal("Submit: $currentText"))
-
-            // Add helpful lore
-            val lore = LoreComponent(listOf(
-                Text.literal("§aClick to submit"),
-                Text.literal("§7Press ESC to cancel")
-            ))
-            resultItem.set(DataComponentTypes.LORE, lore)
-
-            // Make it stand out
-            resultItem.set(DataComponentTypes.ENCHANTMENT_GLINT_OVERRIDE, true)
-
+        if (resultItem != null) {
+            // Output slot can have a custom title
             output.setStack(0, resultItem)
         } else {
             output.setStack(0, ItemStack.EMPTY)
         }
+
+        // Forcibly clear the text field again after setting items
+        // This ensures any item names don't get pulled into the text field
+        setNewItemName("")
+
+        // Now set the initial text if it wasn't empty
+        if (initialText.isNotEmpty()) {
+            setNewItemName(initialText)
+        }
+
+        isInitializing = false
+    }
+
+    /**
+     * Utility function to remove the title (custom name) from non-output items, preserving lore.
+     */
+    private fun removeTitle(item: ItemStack): ItemStack {
+        val copy = item.copy()
+        // Instead of setting a null value, set the custom name to an empty Text literal.
+        copy.setCustomName(Text.literal(""))
+        return copy
+    }
+
+    override fun setNewItemName(newName: String): Boolean {
+        val result = super.setNewItemName(newName)
+
+        if (!isInitializing || newName != currentText) {
+            currentText = newName
+            onTextChange?.invoke(newName)
+        }
+
+        // Important: Don't call updateResult() here - we want to maintain manual control of the output slot
+        return result
+    }
+
+    // Override to do nothing - we manage the result item manually
+    override fun updateResult() {
+        // Do nothing - result slot is controlled by the caller
     }
 
     override fun getLevelCost(): Int = 0  // No XP cost
 
     override fun onSlotClick(slotIndex: Int, button: Int, actionType: SlotActionType, player: PlayerEntity) {
-        // Get the "true" anvil slot index (0=left input, 1=right input, 2=output)
-        val anvilSlot = when {
-            slotIndex == 0 -> 0  // Left input
-            slotIndex == 1 -> 1  // Right input
-            slotIndex == 2 -> 2  // Output
-            else -> -1            // Not an anvil slot
-        }
-
-        // Handle clicks on anvil slots
-        if (anvilSlot in 0..2 && player is ServerPlayerEntity) {
+        // Don't allow taking items from the anvil slots
+        if (slotIndex in 0..2 && actionType == SlotActionType.PICKUP && player is ServerPlayerEntity) {
             val clickType = if (button == 0) ClickType.LEFT else ClickType.RIGHT
-            val stack = when (anvilSlot) {
+
+            // Get the clicked item
+            val stack = when (slotIndex) {
                 0 -> input.getStack(0)
                 1 -> input.getStack(1)
                 2 -> output.getStack(0)
                 else -> ItemStack.EMPTY
             }
 
-            val context = AnvilInteractionContext(anvilSlot, clickType, button, stack, player, this)
-            onInteract?.invoke(context)
+            // Create context
+            val context = AnvilInteractionContext(slotIndex, clickType, button, stack, player, this)
 
-            // Don't allow item pickup
+            // Call the appropriate handler
+            when (slotIndex) {
+                0 -> onLeftClick?.invoke(context)
+                1 -> onRightClick?.invoke(context)
+                2 -> onResultClick?.invoke(context)
+            }
+
+            // Don't allow the default behavior (item pickup)
             return
         }
 
@@ -225,5 +243,31 @@ class ModularAnvilScreenHandler(
     override fun onClosed(player: PlayerEntity) {
         super.onClosed(player)
         onClose?.invoke(input)
+    }
+
+    /**
+     * Utility to update an item in a slot without affecting the text field.
+     * For non-output slots, ensure titles are removed.
+     */
+    fun updateSlot(slot: Int, item: ItemStack?) {
+        val tempText = currentText
+
+        when (slot) {
+            0, 1 -> input.setStack(slot, item?.let { removeTitle(it) } ?: ItemStack.EMPTY)
+            2 -> output.setStack(0, item ?: ItemStack.EMPTY)
+        }
+
+        // If updating slot 0, we need to restore the text field
+        if (slot == 0) {
+            setNewItemName("")  // First clear
+            setNewItemName(tempText)  // Then restore
+        }
+    }
+
+    /**
+     * Utility to forcibly clear the text field
+     */
+    fun clearTextField() {
+        setNewItemName("")
     }
 }
