@@ -57,7 +57,6 @@ object CustomGui {
         itemStack.set(DataComponentTypes.ITEM_NAME, title)
         itemStack.set(DataComponentTypes.LORE, LoreComponent(lore))
 
-        // Ensure the name is no longer than 16 characters to comply with Minecraft's limit
         val safeName = textureName.take(16)
         val profile = GameProfile(UUID.randomUUID(), safeName)
         profile.properties.put("textures", Property("textures", textureValue))
@@ -170,7 +169,7 @@ class CustomScreenHandler(
     }
 
     init {
-        // Add GUI slots
+        // Add GUI slots (non-interactive, preventing item placement and removal)
         for (i in 0 until guiInventory.size()) {
             addSlot(InteractiveSlot(guiInventory, i, false))
         }
